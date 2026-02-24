@@ -309,6 +309,11 @@ class Bill(models.Model):
             'number': self.number
         }
         if representation == 'detail':
+            try:
+                bill_text = self.get_text_object()
+                full_text = {'en': bill_text.text_en, 'fr': bill_text.text_fr}
+            except BillText.DoesNotExist:
+                full_text = None
             d.update(
                 short_title={'en': self.short_title_en, 'fr': self.short_title_fr},
                 home_chamber=self.get_institution_display(),
@@ -317,6 +322,7 @@ class Bill(models.Model):
                 sponsor_politician_membership_url=reverse('politician_membership',
                     kwargs={'member_id': self.sponsor_member_id}) if self.sponsor_member_id else None,
                 text_url=self.get_billtext_url(),
+                full_text=full_text,
                 # other_session_urls=[self.bill.url_for_session(s)
                 #     for s in self.bill.sessions.all()
                 #     if s.id != self.session_id],

@@ -82,6 +82,11 @@ COMPRESS_ROOT = os.path.realpath(os.path.join(PROJ_ROOT, '..', '..', 'frontend_b
 PARLIAMENT_LANGUAGE_MODEL_PATH = os.path.realpath(os.path.join(PROJ_ROOT, '..', '..', 'language_models'))
 PARLIAMENT_GENERATE_TEXT_ANALYSIS = False
 
+# Ollama (local LLM) - used by CCUS analysis and other LLM features
+OLLAMA_BASE_URL = 'http://localhost:11434'
+# Model for CCUS opinion classification. Change to switch models, e.g. 'ollama:llama3.1:8b'
+CCUS_LLM_MODEL = 'ollama:qwen3:14b'
+
 APPEND_SLASH = False
 
 SESSION_COOKIE_HTTPONLY = True

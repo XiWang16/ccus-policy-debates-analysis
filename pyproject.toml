@@ -22,7 +22,13 @@ dependencies = [
     "webob",
     "oauth2client",
     "whitenoise",
+    "spacy>=3.7",
 ]
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.13"
 
 [project.optional-dependencies]
 production = [

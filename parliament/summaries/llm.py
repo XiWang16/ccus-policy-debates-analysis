@@ -11,6 +11,7 @@ class llms:
     QUICK = 'google:gemini-2.0-flash'
     THINKING = 'google:gemini-2.5-flash-preview-04-17'
     EXPERT = 'google:gemini-2.5-pro-exp-03-25'
+    OLLAMA = 'ollama:qwen3:14b'
 
 class LLMProviderError(Exception):
     pass
@@ -27,6 +28,9 @@ def get_llm_response(instructions: str, text: str, model: str | None = None,
                                                             temperature, top_p)
     elif provider == 'or':  
         response_text, metadata = _get_llm_response_openrouter(instructions, text, model, chat_history, json)
+    elif provider == 'ollama':
+        response_text, metadata = _get_llm_response_ollama(instructions, text, model, chat_history, json,
+                                                          temperature, top_p)
     else:
         raise ValueError(f"Unknown provider: {provider}")
 
@@ -123,6 +127,63 @@ def _get_llm_response_google(instructions, text, model, chat_history, json,
         metadata["top_p"] = top_p
 
     return (response_text, metadata)
+
+def _get_llm_response_ollama(instructions, text, model, chat_history, json,
+                             temperature, top_p) -> tuple[str, dict]:
+    base_url = getattr(settings, 'OLLAMA_BASE_URL', 'http://localhost:11434').rstrip('/')
+    url = f"{base_url}/api/chat"
+
+    messages = [{"role": "system", "content": instructions}]
+    for role, content in chat_history:
+        messages.append({"role": "user" if role == "user" else "assistant", "content": content})
+    messages.append({"role": "user", "content": text})
+
+    req = {
+        "model": model,
+        "messages": messages,
+        "stream": False,
+    }
+    if json:
+        req["format"] = json if isinstance(json, dict) else "json"
+    elif isinstance(json, dict):
+        req["format"] = json
+
+    options = {}
+    if temperature is not None:
+        options["temperature"] = temperature
+    elif json:
+        options["temperature"] = 0
+    if top_p is not None:
+        options["top_p"] = top_p
+    if options:
+        req["options"] = options
+
+    response = requests.post(url, json=req, headers={"Content-Type": "application/json"}, timeout=120)
+    if response.status_code != 200:
+        try:
+            message = response.json().get("error", response.text)
+        except Exception:
+            message = response.text
+        raise LLMProviderError(f"Ollama responded with status {response.status_code}: {message}")
+
+    rj = response.json()
+    response_text = rj.get("message", {}).get("content", "")
+    eval_count = rj.get("eval_count", 0)
+    metadata = {
+        "model": model,
+        "provider": "ollama",
+        "tokens": {
+            "request": rj.get("prompt_eval_count"),
+            "response": eval_count,
+        },
+    }
+    if temperature is not None:
+        metadata["temperature"] = temperature
+    if top_p is not None:
+        metadata["top_p"] = top_p
+
+    return (response_text, metadata)
+
 
 def _get_llm_response_openrouter(instructions, text, model, chat_history, json) -> tuple[str, dict]:
     messages = [("system", instructions)] + chat_history + [("user", text)]
