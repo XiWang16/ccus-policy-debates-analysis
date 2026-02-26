@@ -17,6 +17,7 @@ from .bill_finder import CCUSBillFinder
 from .hansard_fetcher import HansardFetcher, strip_html
 from .jurisdiction_extractor import SpacyJurisdictionExtractor
 from .keywords import StaticCCUSKeywordProvider
+from .manual_bills import get_manual_bill_numbers, is_valid_bill_number
 from .models import (
     Argument,
     BillAnalysis,
@@ -26,7 +27,7 @@ from .models import (
     PoliticalActor,
 )
 from .opinion_classifier import GeminiOpinionClassifier
-from .output import JSONOutputWriter
+from .output import CSVOutputWriter, JSONOutputWriter
 from .pipeline import CCUSAnalysisPipeline
 
 
@@ -68,6 +69,48 @@ class KeywordProviderTest(TestCase):
         provider = StaticCCUSKeywordProvider()
         kws = [k.lower() for k in provider.get_keywords()]
         self.assertTrue(any("captage" in k for k in kws))
+
+    def test_expanded_keywords_present(self):
+        provider = StaticCCUSKeywordProvider()
+        kws = [k.lower() for k in provider.get_keywords()]
+        for expected in ("direct air capture", "blue hydrogen", "enhanced oil recovery"):
+            self.assertIn(expected, kws, f"Expected keyword missing: {expected}")
+
+
+# ---------------------------------------------------------------------------
+# Manual bills validation
+# ---------------------------------------------------------------------------
+
+class ManualBillsTest(TestCase):
+    def test_valid_house_bill(self):
+        self.assertTrue(is_valid_bill_number("C-50"))
+
+    def test_valid_senate_bill(self):
+        self.assertTrue(is_valid_bill_number("S-243"))
+
+    def test_invalid_lowercase(self):
+        self.assertFalse(is_valid_bill_number("c-50"))
+
+    def test_invalid_no_dash(self):
+        self.assertFalse(is_valid_bill_number("C50"))
+
+    def test_invalid_wrong_prefix(self):
+        self.assertFalse(is_valid_bill_number("B-10"))
+
+    def test_invalid_empty(self):
+        self.assertFalse(is_valid_bill_number(""))
+
+    def test_get_manual_bill_numbers_returns_list(self):
+        numbers = get_manual_bill_numbers()
+        self.assertIsInstance(numbers, list)
+        # All returned numbers must be valid
+        for n in numbers:
+            self.assertTrue(is_valid_bill_number(n), f"Invalid number in list: {n}")
+
+    def test_manual_list_contains_expected_bills(self):
+        numbers = get_manual_bill_numbers()
+        for expected in ("S-243", "C-50", "C-59"):
+            self.assertIn(expected, numbers)
 
 
 # ---------------------------------------------------------------------------
@@ -125,11 +168,17 @@ class OpenParliamentClientTest(TestCase):
 # ---------------------------------------------------------------------------
 
 class BillFinderTest(TestCase):
-    def _make_finder(self, bills):
+    def _make_finder(self, bills, search_full_text=False):
+        """Build a finder with a mocked client. Full-text disabled by default
+        so tests don't need to mock the detail endpoint."""
         client = MagicMock()
         client.get_bills.return_value = iter(bills)
         provider = StaticCCUSKeywordProvider()
-        return CCUSBillFinder(client=client, keyword_provider=provider)
+        return CCUSBillFinder(
+            client=client,
+            keyword_provider=provider,
+            search_full_text=search_full_text,
+        )
 
     def test_finds_matching_bill(self):
         bills = [
@@ -161,6 +210,66 @@ class BillFinderTest(TestCase):
         ]
         finder = self._make_finder(bills)
         self.assertEqual(len(finder.find_bills()), 1)
+
+    def test_find_by_number_calls_api_with_filter(self):
+        client = MagicMock()
+        client.get_bills.return_value = iter([
+            {"url": "/bills/44-1/C-50/", "number": "C-50", "name": {"en": "Sustainable Jobs Act"}},
+        ])
+        provider = StaticCCUSKeywordProvider()
+        finder = CCUSBillFinder(client=client, keyword_provider=provider, search_full_text=False)
+        results = finder.find_by_number("C-50")
+        client.get_bills.assert_called_once_with(number="C-50")
+        self.assertEqual(len(results), 1)
+
+    def test_speeches_contain_keywords_true(self):
+        speeches = [
+            {"content_text": {"en": "We strongly support carbon capture technology."}},
+        ]
+        client = MagicMock()
+        finder = CCUSBillFinder(client=client, keyword_provider=StaticCCUSKeywordProvider(), search_full_text=False)
+        self.assertTrue(finder.speeches_contain_keywords(speeches))
+
+    def test_speeches_contain_keywords_false(self):
+        speeches = [
+            {"content_text": {"en": "This is about agriculture subsidies."}},
+        ]
+        client = MagicMock()
+        finder = CCUSBillFinder(client=client, keyword_provider=StaticCCUSKeywordProvider(), search_full_text=False)
+        self.assertFalse(finder.speeches_contain_keywords(speeches))
+
+    def test_bill_contains_keywords_via_full_text(self):
+        client = MagicMock()
+        client.get_bill_detail.return_value = {
+            "full_text": {"en": "This bill establishes a framework for carbon capture and storage.", "fr": ""},
+            "short_title": {"en": "", "fr": ""},
+        }
+        finder = CCUSBillFinder(client=client, keyword_provider=StaticCCUSKeywordProvider(), search_full_text=False)
+        bill = {"url": "/bills/44-1/C-99/"}
+        self.assertTrue(finder.bill_contains_keywords(bill))
+
+    def test_bill_contains_keywords_no_full_text(self):
+        client = MagicMock()
+        client.get_bill_detail.return_value = {"full_text": None, "short_title": {"en": "", "fr": ""}}
+        finder = CCUSBillFinder(client=client, keyword_provider=StaticCCUSKeywordProvider(), search_full_text=False)
+        bill = {"url": "/bills/44-1/C-99/"}
+        self.assertFalse(finder.bill_contains_keywords(bill))
+
+    def test_find_bills_with_full_text_search(self):
+        """A bill not matching title should be found when its full text contains a keyword."""
+        bills = [
+            {"url": "/bills/44-1/C-99/", "name": {"en": "An Act about something", "fr": ""}},
+        ]
+        client = MagicMock()
+        client.get_bills.return_value = iter(bills)
+        client.get_bill_detail.return_value = {
+            "full_text": {"en": "Establishes CCUS investment requirements.", "fr": ""},
+            "short_title": {"en": "", "fr": ""},
+        }
+        provider = StaticCCUSKeywordProvider()
+        finder = CCUSBillFinder(client=client, keyword_provider=provider, search_full_text=True)
+        results = finder.find_bills()
+        self.assertEqual(len(results), 1)
 
 
 # ---------------------------------------------------------------------------
@@ -301,7 +410,6 @@ class SpacyJurisdictionExtractorTest(TestCase):
         text = "Canada and Alberta have significant interest in carbon capture projects."
         results = self.extractor.extract(text)
         entities = {j.entity for j in results}
-        # At least one of the GPEs should be detected
         self.assertTrue(
             entities & {"Canada", "Alberta"},
             f"Expected GPE entities, got: {entities}",
@@ -334,6 +442,7 @@ class JSONOutputWriterTest(TestCase):
             actors=[actor],
             opinions=[opinion],
             jurisdictions=[jurisdiction],
+            match_reason="keyword",
         )
         return CCUSAnalysisResult(bills=[bill_analysis], generated_at="2026-02-21T00:00:00+00:00")
 
@@ -378,6 +487,144 @@ class JSONOutputWriterTest(TestCase):
             self.assertEqual(opinions[0]["opinions"][0]["stance"], "support")
             self.assertEqual(opinions[0]["opinions"][0]["actor"]["name"], "Alice")
 
+    def test_summary_includes_match_reason(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            writer = JSONOutputWriter(Path(tmpdir))
+            result = self._make_result()
+            writer.write(result)
+
+            with open(Path(tmpdir) / "ccus_summary.json") as f:
+                summary = json.load(f)
+            self.assertEqual(summary["bills"][0]["match_reason"], "keyword")
+
+
+# ---------------------------------------------------------------------------
+# CSVOutputWriter
+# ---------------------------------------------------------------------------
+
+class CSVOutputWriterTest(TestCase):
+    def _make_result(self) -> CCUSAnalysisResult:
+        actor = PoliticalActor(
+            name="Alice",
+            politician_url="/politicians/1/",
+            party="NDP",
+            speeches=[{"time": "2024-03-15 14:00:00"}],
+        )
+        argument = Argument(type="environmental", text="Reduces emissions", quote="This will cut emissions.")
+        opinion_support = Opinion(actor=actor, stance="support", arguments=[argument], confidence="high")
+
+        actor2 = PoliticalActor(
+            name="Bob",
+            politician_url="/politicians/2/",
+            party="Conservative",
+            speeches=[{"time": "2024-03-16 10:00:00"}],
+        )
+        opinion_oppose = Opinion(actor=actor2, stance="oppose", arguments=[], confidence="medium")
+
+        jurisdiction = Jurisdiction(entity="Alberta", label="GPE", context="Alberta will lead CCS efforts.")
+        bill_analysis = BillAnalysis(
+            bill={
+                "url": "/bills/44-1/C-59/",
+                "number": "C-59",
+                "session": "44-1",
+                "name": {"en": "Fall Economic Statement Implementation Act 2023", "fr": ""},
+                "introduced": "2023-11-21",
+                "status_code": "RoyalAssentGiven",
+                "home_chamber": "House",
+                "sponsor_politician_url": "/politicians/trudeau/",
+            },
+            speeches=[],
+            actors=[actor, actor2],
+            opinions=[opinion_support, opinion_oppose],
+            jurisdictions=[jurisdiction],
+            match_reason="manual",
+        )
+        return CCUSAnalysisResult(bills=[bill_analysis], generated_at="2026-02-21T00:00:00+00:00")
+
+    def test_creates_output_dir(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir) / "csv"
+            writer = CSVOutputWriter(out)
+            writer.write(self._make_result())
+            self.assertTrue(out.is_dir())
+
+    def test_writes_all_csv_files(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir) / "csv"
+            writer = CSVOutputWriter(out)
+            writer.write(self._make_result())
+            for fname in (
+                "ccus_bills.csv",
+                "ccus_actors_support.csv",
+                "ccus_actors_opposition.csv",
+                "ccus_arguments.csv",
+                "ccus_jurisdictions.csv",
+            ):
+                self.assertTrue((out / fname).exists(), f"Missing: {fname}")
+
+    def test_bills_csv_columns(self):
+        import csv as csv_module
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir) / "csv"
+            writer = CSVOutputWriter(out)
+            writer.write(self._make_result())
+            with open(out / "ccus_bills.csv", encoding="utf-8") as f:
+                reader = csv_module.DictReader(f)
+                rows = list(reader)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["bill_number"], "C-59")
+            self.assertEqual(rows[0]["session"], "44-1")
+            self.assertEqual(rows[0]["match_reason"], "manual")
+
+    def test_actors_support_csv(self):
+        import csv as csv_module
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir) / "csv"
+            writer = CSVOutputWriter(out)
+            writer.write(self._make_result())
+            with open(out / "ccus_actors_support.csv", encoding="utf-8") as f:
+                rows = list(csv_module.DictReader(f))
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["actor_name"], "Alice")
+            self.assertEqual(rows[0]["bill_number"], "C-59")
+
+    def test_actors_opposition_csv(self):
+        import csv as csv_module
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir) / "csv"
+            writer = CSVOutputWriter(out)
+            writer.write(self._make_result())
+            with open(out / "ccus_actors_opposition.csv", encoding="utf-8") as f:
+                rows = list(csv_module.DictReader(f))
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["actor_name"], "Bob")
+
+    def test_arguments_csv(self):
+        import csv as csv_module
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir) / "csv"
+            writer = CSVOutputWriter(out)
+            writer.write(self._make_result())
+            with open(out / "ccus_arguments.csv", encoding="utf-8") as f:
+                rows = list(csv_module.DictReader(f))
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["actor_name"], "Alice")
+            self.assertEqual(rows[0]["argument_label"], "environmental")
+            self.assertIn("Reduces", rows[0]["argument_text"])
+
+    def test_jurisdictions_csv(self):
+        import csv as csv_module
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir) / "csv"
+            writer = CSVOutputWriter(out)
+            writer.write(self._make_result())
+            with open(out / "ccus_jurisdictions.csv", encoding="utf-8") as f:
+                rows = list(csv_module.DictReader(f))
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["source_name"], "Alberta")
+            self.assertEqual(rows[0]["entity_type"], "GPE")
+            self.assertEqual(rows[0]["bill_number"], "C-59")
+
 
 # ---------------------------------------------------------------------------
 # Pipeline (integration-style with mocks)
@@ -385,7 +632,8 @@ class JSONOutputWriterTest(TestCase):
 
 class CCUSAnalysisPipelineTest(TestCase):
     def test_run_produces_result(self):
-        bill = {"url": "/bills/44-1/C-1/", "name": {"en": "CCUS Act", "fr": ""}}
+        bill = {"url": "/bills/44-1/C-1/", "number": "C-1", "session": "44-1",
+                "name": {"en": "CCUS Act", "fr": ""}}
         speech = {
             "politician_url": "/politicians/1/",
             "attribution": {"en": "Alice"},
@@ -396,7 +644,9 @@ class CCUSAnalysisPipelineTest(TestCase):
         opinion = Opinion(actor=actor, stance="support", arguments=[], confidence="high")
 
         mock_bill_finder = MagicMock()
-        mock_bill_finder.find_bills.return_value = [bill]
+        mock_bill_finder.find_by_number.return_value = [bill]
+        mock_bill_finder.bill_contains_keywords.return_value = True
+        mock_bill_finder.speeches_contain_keywords.return_value = False
 
         mock_hansard = MagicMock()
         mock_hansard.get_speeches.return_value = [speech]
@@ -407,10 +657,6 @@ class CCUSAnalysisPipelineTest(TestCase):
         mock_opinion_classifier = MagicMock()
         mock_opinion_classifier.classify.return_value = opinion
 
-        mock_jurisdiction_extractor = MagicMock()
-        mock_jurisdiction_extractor.extract.return_value = [
-            Jurisdiction(entity="Canada", label="GPE", context="Canada will invest.")
-        ]
 
         pipeline = CCUSAnalysisPipeline(
             client=MagicMock(),
@@ -419,11 +665,124 @@ class CCUSAnalysisPipelineTest(TestCase):
             hansard_fetcher=mock_hansard,
             actor_extractor=mock_actor_extractor,
             opinion_classifier=mock_opinion_classifier,
-            jurisdiction_extractor=mock_jurisdiction_extractor,
+            manual_bill_numbers=["C-1"],
         )
 
         result = pipeline.run()
         self.assertIsInstance(result, CCUSAnalysisResult)
         self.assertEqual(len(result.bills), 1)
         self.assertEqual(result.bills[0].opinions[0].stance, "support")
-        self.assertEqual(result.bills[0].jurisdictions[0].entity, "Canada")
+        self.assertEqual(result.bills[0].match_reason, "manual")
+
+    def test_manual_bills_included(self):
+        """Both manual bill numbers produce a BillAnalysis each (one with keywords, one without)."""
+        bill_c1 = {"url": "/bills/44-1/C-1/", "number": "C-1", "session": "44-1",
+                   "name": {"en": "CCUS Act", "fr": ""}}
+        bill_c50 = {"url": "/bills/44-1/C-50/", "number": "C-50", "session": "44-1",
+                    "name": {"en": "Sustainable Jobs Act", "fr": ""}}
+
+        mock_bill_finder = MagicMock()
+        mock_bill_finder.find_by_number.side_effect = [[bill_c1], [bill_c50]]
+        # C-1 has keywords, C-50 does not
+        mock_bill_finder.bill_contains_keywords.side_effect = [True, False]
+        mock_bill_finder.speeches_contain_keywords.side_effect = [False, False]
+
+        mock_hansard = MagicMock()
+        mock_hansard.get_speeches.return_value = []
+
+        mock_actor_extractor = MagicMock()
+        mock_actor_extractor.extract.return_value = []
+
+        mock_opinion_classifier = MagicMock()
+
+        pipeline = CCUSAnalysisPipeline(
+            client=MagicMock(),
+            keyword_provider=MagicMock(),
+            bill_finder=mock_bill_finder,
+            hansard_fetcher=mock_hansard,
+            actor_extractor=mock_actor_extractor,
+            opinion_classifier=mock_opinion_classifier,
+            manual_bill_numbers=["C-1", "C-50"],
+        )
+
+        result = pipeline.run()
+        self.assertEqual(len(result.bills), 2)
+        # All results are from the manual list
+        self.assertTrue(all(ba.match_reason == "manual" for ba in result.bills))
+
+    def test_single_manual_bill_produces_one_result(self):
+        """A single manual bill number produces exactly one BillAnalysis."""
+        bill = {"url": "/bills/44-1/C-50/", "number": "C-50", "session": "44-1",
+                "name": {"en": "Sustainable Jobs Act", "fr": ""}}
+
+        mock_bill_finder = MagicMock()
+        mock_bill_finder.find_by_number.return_value = [bill]
+        mock_bill_finder.bill_contains_keywords.return_value = False
+        mock_bill_finder.speeches_contain_keywords.return_value = False
+
+        mock_hansard = MagicMock()
+        mock_hansard.get_speeches.return_value = []
+
+        mock_actor_extractor = MagicMock()
+        mock_actor_extractor.extract.return_value = []
+
+        mock_opinion_classifier = MagicMock()
+
+        pipeline = CCUSAnalysisPipeline(
+            client=MagicMock(),
+            keyword_provider=MagicMock(),
+            bill_finder=mock_bill_finder,
+            hansard_fetcher=mock_hansard,
+            actor_extractor=mock_actor_extractor,
+            opinion_classifier=mock_opinion_classifier,
+            manual_bill_numbers=["C-50"],
+        )
+
+        result = pipeline.run()
+        self.assertEqual(len(result.bills), 1)
+        self.assertEqual(result.bills[0].match_reason, "manual")
+
+    def test_manual_bill_prints_warning_when_no_keywords(self):
+        """A manual bill with no CCUS keywords in text or speeches should print a warning."""
+        manual_bill = {
+            "url": "/bills/44-1/C-69/",
+            "number": "C-69",
+            "session": "44-1",
+            "name": {"en": "Impact Assessment Act", "fr": ""},
+        }
+
+        mock_bill_finder = MagicMock()
+        mock_bill_finder.find_bills.return_value = []
+        mock_bill_finder.find_by_number.return_value = [manual_bill]
+        mock_bill_finder.bill_contains_keywords.return_value = False
+        mock_bill_finder.speeches_contain_keywords.return_value = False
+
+        mock_hansard = MagicMock()
+        mock_hansard.get_speeches.return_value = []
+
+        mock_actor_extractor = MagicMock()
+        mock_actor_extractor.extract.return_value = []
+        mock_opinion_classifier = MagicMock()
+
+        pipeline = CCUSAnalysisPipeline(
+            client=MagicMock(),
+            keyword_provider=MagicMock(),
+            bill_finder=mock_bill_finder,
+            hansard_fetcher=mock_hansard,
+            actor_extractor=mock_actor_extractor,
+            opinion_classifier=mock_opinion_classifier,
+            manual_bill_numbers=["C-69"],
+        )
+
+        import io
+        from contextlib import redirect_stdout
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            result = pipeline.run()
+
+        output = buf.getvalue()
+        self.assertIn("WARNING", output)
+        self.assertIn("C-69", output)
+        # Bill is still included in results despite no keyword match
+        self.assertEqual(len(result.bills), 1)
+        self.assertEqual(result.bills[0].match_reason, "manual")

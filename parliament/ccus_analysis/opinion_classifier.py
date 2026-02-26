@@ -112,8 +112,13 @@ class LLMOpinionClassifier:
             confidence=data.get("confidence", "low"),
         )
 
+    # Maximum characters of combined speech text to send to the LLM.
+    # Keeps prompts reasonable for local models and avoids context-window errors.
+    MAX_COMBINED_CHARS = 12_000
+
     def _combine_speeches(self, speeches: list[dict]) -> str:
         parts = []
+        total = 0
         for speech in speeches:
             # Prefer already-stripped text; fall back to stripping HTML
             content_text = speech.get("content_text", {})
@@ -125,8 +130,15 @@ class LLMOpinionClassifier:
                     text = strip_html(content.get("en") or content.get("fr") or "")
                 else:
                     text = ""
-            if text.strip():
-                parts.append(text.strip())
+            text = text.strip()
+            if not text:
+                continue
+            remaining = self.MAX_COMBINED_CHARS - total
+            if remaining <= 0:
+                break
+            chunk = text[:remaining]
+            parts.append(chunk)
+            total += len(chunk)
         return "\n\n".join(parts)
 
 

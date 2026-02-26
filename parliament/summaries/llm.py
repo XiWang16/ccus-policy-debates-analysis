@@ -158,7 +158,7 @@ def _get_llm_response_ollama(instructions, text, model, chat_history, json,
     if options:
         req["options"] = options
 
-    response = requests.post(url, json=req, headers={"Content-Type": "application/json"}, timeout=120)
+    response = requests.post(url, json=req, headers={"Content-Type": "application/json"}, timeout=600)
     if response.status_code != 200:
         try:
             message = response.json().get("error", response.text)
