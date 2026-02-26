@@ -8,6 +8,9 @@ class ActorExtractor:
         anonymous: list[dict] = []
 
         for speech in speeches:
+            if speech.get("procedural"):
+                continue
+
             politician_url = speech.get("politician_url") or speech.get("politician")
             if not politician_url:
                 anonymous.append(speech)

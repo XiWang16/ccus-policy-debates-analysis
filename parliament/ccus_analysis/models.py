@@ -38,6 +38,10 @@ class BillAnalysis:
     actors: list[PoliticalActor]
     opinions: list[Opinion]
     jurisdictions: list[Jurisdiction]
+    # How this bill was identified as CCUS-related:
+    #   "keyword"  — matched a CCUS keyword in the title or full text
+    #   "manual"   — explicitly listed in MANUAL_CCUS_BILL_NUMBERS
+    match_reason: str = "keyword"
 
 
 @dataclass
