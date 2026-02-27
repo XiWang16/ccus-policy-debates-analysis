@@ -117,6 +117,35 @@ def _save_fig(fig, slug):
     plt.close(fig)
 
 
+def _save_legend_fig(handles, title: str, slug: str) -> None:
+    """Save a standalone legend as its own PNG and SVG."""
+    fig_leg = plt.figure(figsize=(3, 2.5), facecolor=BG)
+    ax_leg  = fig_leg.add_subplot(111)
+    ax_leg.set_facecolor(BG)
+    ax_leg.axis("off")
+    leg = ax_leg.legend(
+        handles=handles, loc="center",
+        framealpha=0.3, facecolor=PANEL_BG, edgecolor=GRID,
+        labelcolor="#CCCCDD", title=title, title_fontsize=10, fontsize=9,
+    )
+    leg.get_title().set_color("#CCCCDD")
+    png = OUTPUT_DIR / f"{slug}.png"
+    svg = OUTPUT_DIR / f"{slug}.svg"
+    fig_leg.savefig(png, dpi=BASE_DPI, bbox_inches="tight", facecolor=BG)
+    fig_leg.savefig(svg, bbox_inches="tight", facecolor=BG)
+    print(f"  Saved {png}")
+    print(f"  Saved {svg}")
+    plt.close(fig_leg)
+
+
+def _clean_mp_name(full_name: str) -> str:
+    """Extract 'First Last' from 'Mr. First Last (Riding, Party)' attribution strings."""
+    import re
+    name = re.sub(r"^(Mr\.|Ms\.|Mrs\.|Hon\.|M\.|Mme\.)\s+", "", full_name.strip())
+    name = re.sub(r"\s*\(.*\)\s*$", "", name)
+    return name.strip() or full_name
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # MOCK DATA
 # ─────────────────────────────────────────────────────────────────────────────
@@ -406,16 +435,33 @@ def plot_01_mp_lollipop(speeches_df: pd.DataFrame) -> None:
         return
 
     pivot["total"] = pivot["Pro-CCUS"] + pivot["Anti-CCUS"] + pivot["Conditional"]
-    pivot = pivot.nlargest(20, "total").reset_index(drop=True)
+
+    # Sort: party group order first, then descending speech count within each party.
+    _PARTY_ORDER = ["Conservative", "Liberal", "NDP", "Bloc Québécois", "Bloc", "Green", "Independent"]
+    pivot["_party_rank"] = pivot["party"].map(
+        lambda p: _PARTY_ORDER.index(p) if p in _PARTY_ORDER else len(_PARTY_ORDER)
+    )
+    pivot = (
+        pivot.sort_values(["_party_rank", "total"], ascending=[True, False])
+        .head(20)
+        .reset_index(drop=True)
+    )
+
+    mx_candidates = [pivot["Pro-CCUS"].max(), pivot["Anti-CCUS"].max(), 1]
+    mx_candidates = [c for c in mx_candidates if pd.notna(c) and np.isfinite(c)]
+    if not mx_candidates:
+        print("  Skipping Plot 1: no finite speech counts for axis scaling.")
+        return
+    mx = max(mx_candidates)
 
     n = len(pivot)
-    fig = _make_fig((12, 10))
+    fig = _make_fig((12, max(8, n * 0.55 + 2)))
     ax  = fig.add_subplot(111)
     _apply_dark_theme(ax)
 
     for i, row in pivot.iterrows():
-        y = n - 1 - i
-        pc = PARTY_COLORS.get(row["party"], "#A0A0B0")
+        y   = n - 1 - i
+        pc  = PARTY_COLORS.get(row["party"], "#A0A0B0")
 
         if row["Pro-CCUS"] > 0:
             ax.hlines(y, 0, row["Pro-CCUS"],  color=STANCE_COLORS["Pro-CCUS"],  lw=2.5, zorder=3)
@@ -424,43 +470,48 @@ def plot_01_mp_lollipop(speeches_df: pd.DataFrame) -> None:
             ax.hlines(y, -row["Anti-CCUS"], 0, color=STANCE_COLORS["Anti-CCUS"], lw=2.5, zorder=3)
             ax.scatter(-row["Anti-CCUS"], y, s=80, color=pc, edgecolors="white", lw=1.2, zorder=5)
         if row["Conditional"] > 0:
-            ax.scatter(0, y + 0.25, s=40, color=STANCE_COLORS["Conditional"], marker="D", zorder=4)
+            # Conditional stance is shown as a yellow diamond centered at x=0.
+            ax.scatter(0, y + 0.33, s=40, color=STANCE_COLORS["Conditional"], marker="D", zorder=4)
 
-    labels = [
-        f"{r.mp_name.split()[-1]} ({PARTY_ABBREV.get(r.party, '?')})"
-        for _, r in pivot.iterrows()
-    ]
+    # Put MP labels in the middle (x=0) instead of the left y-axis.
     ax.set_yticks(range(n))
-    ax.set_yticklabels(labels[::-1])
-    for tick, (_, row) in zip(ax.get_yticklabels(), pivot.iterrows()):
-        tick.set_color(PARTY_COLORS.get(row["party"], "#A0A0B0"))
+    ax.set_yticklabels([""] * n)
+    ax.tick_params(axis="y", length=0)
+    for i, row in pivot.iterrows():
+        y = n - 1 - i
+        pc = PARTY_COLORS.get(row["party"], "#A0A0B0")
+        label = f"{_clean_mp_name(row['mp_name'])} ({PARTY_ABBREV.get(row['party'], '?')})"
+        ax.text(
+            0, y, label,
+            ha="center", va="center",
+            color=pc, fontsize=10, fontweight="bold",
+            zorder=6,
+            bbox=dict(boxstyle="round,pad=0.25", facecolor=PANEL_BG, edgecolor="none", alpha=0.75),
+        )
 
-    mx_candidates = [pivot["Pro-CCUS"].max(), pivot["Anti-CCUS"].max(), 1]
-    mx_candidates = [c for c in mx_candidates if pd.notna(c) and np.isfinite(c)]
-    if not mx_candidates:
-        print("  Skipping Plot 1: no finite speech counts for axis scaling.")
-        return
-    mx = max(mx_candidates)
-    ax.set_xlim(-mx * 1.35, mx * 1.35)
+    ax.set_xlim(-mx * 1.5, mx * 1.35)
     ax.axvline(0, color="white", lw=1.5, alpha=0.4, zorder=2)
-    ax.set_xlabel("← Anti-CCUS   |   Pro-CCUS →")
-    ax.text(mx * 1.25, n - 0.3, "Speech count", color="#CCCCDD", fontsize=8, ha="right")
 
-    legend1 = ax.legend(
-        handles=[
-            Line2D([0], [0], color=STANCE_COLORS["Pro-CCUS"],  lw=2.5, marker="o", markersize=8, label="Pro-CCUS"),
-            Line2D([0], [0], color=STANCE_COLORS["Anti-CCUS"], lw=2.5, marker="o", markersize=8, label="Anti-CCUS"),
-        ],
-        loc="upper left", framealpha=0.2, facecolor=PANEL_BG, edgecolor=GRID, labelcolor="#CCCCDD",
+    # Bold, prominent directional label under the plot.
+    ax.set_xlabel(
+        "← ANTI   |   CONDITIONAL   |   PRO →",
+        fontweight="bold", fontsize=13, labelpad=10,
     )
-    ax.add_artist(legend1)
-    party_patches = [mpatches.Patch(color=c, label=p) for p, c in PARTY_COLORS.items()]
-    ax.legend(handles=party_patches, loc="lower right", framealpha=0.2, facecolor=PANEL_BG,
-              edgecolor=GRID, labelcolor="#CCCCDD", fontsize=8, title="Party",
-              title_fontsize=9, ncol=2)
 
-    ax.set_title("Parliamentary Engagement with Federal CCUS Legislation\nby MP and Stance",
-                 color="white", fontsize=14, fontweight="bold")
+    ax.set_title(
+        "Parliamentary Engagement with Federal CCUS Legislation\nby MP and Stance",
+        color="white", fontsize=14, fontweight="bold",
+    )
+
+    # Save party legend as a standalone figure.
+    present_parties = pivot["party"].unique()
+    party_patches = [
+        mpatches.Patch(color=c, label=p)
+        for p, c in PARTY_COLORS.items()
+        if p in present_parties
+    ]
+    _save_legend_fig(party_patches, "Party", "vis_01_mp_lollipop_legend")
+
     _save_fig(fig, "vis_01_mp_lollipop")
 
 
@@ -938,6 +989,12 @@ def plot_09_wordclouds(speeches_df: pd.DataFrame) -> None:
         except Exception:
             scores = {w: 1.0 for text in corpus for w in text.split()[:10]}
 
+        # Remove zero-weight words and skip if nothing remains.
+        scores = {w: v for w, v in scores.items() if v > 0}
+        if not scores:
+            ax.axis("off")
+            continue
+
         wc = WordCloud(
             background_color="#1A1A2E",
             color_func=color_func_for(frame_palettes[frame]),
@@ -1048,6 +1105,574 @@ def plot_10_ideological_positions(speeches_df: pd.DataFrame) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# INTERACTIVE HTML DASHBOARD  (plots 1, 2, 4, 5, 6, 7, 9)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _hex_rgba(hex_color: str, alpha: float = 0.45) -> str:
+    r, g, b = int(hex_color[1:3], 16), int(hex_color[3:5], 16), int(hex_color[5:7], 16)
+    return f"rgba({r},{g},{b},{alpha})"
+
+
+def _plotly_layout(**extra) -> dict:
+    base = dict(
+        paper_bgcolor=BG, plot_bgcolor=PANEL_BG,
+        font=dict(color="#CCCCDD", size=12, family="Inter"),
+        margin=dict(l=60, r=40, t=70, b=50),
+    )
+    base.update(extra)
+    return base
+
+
+def _write_interactive(fig, slug: str) -> Path:
+    """Write a standalone interactive HTML file; return its path."""
+    path = OUTPUT_DIR / f"{slug}_interactive.html"
+    fig.write_html(str(path), include_plotlyjs="cdn")
+    print(f"  Saved {path}")
+    return path
+
+
+def _iplot_01_lollipop(speeches_df: pd.DataFrame) -> None:
+    """Interactive diverging bar: MP speaking frequency × stance."""
+    try:
+        import plotly.graph_objects as go
+    except ImportError:
+        return
+
+    if speeches_df.empty:
+        return
+
+    agg = speeches_df.groupby(["mp_name", "party", "stance"])["speech_count"].sum().reset_index()
+    pivot = (agg.pivot_table(index=["mp_name", "party"], columns="stance",
+                             values="speech_count", fill_value=0).reset_index())
+    for col in ["Pro-CCUS", "Anti-CCUS", "Conditional"]:
+        if col not in pivot.columns:
+            pivot[col] = 0
+    pivot["total"] = pivot["Pro-CCUS"] + pivot["Anti-CCUS"] + pivot["Conditional"]
+
+    _PARTY_ORDER = ["Conservative", "Liberal", "NDP", "Bloc Québécois", "Bloc", "Green", "Independent"]
+    pivot["_pr"] = pivot["party"].map(
+        lambda p: _PARTY_ORDER.index(p) if p in _PARTY_ORDER else len(_PARTY_ORDER))
+    pivot = pivot.sort_values(["_pr", "total"], ascending=[True, False]).head(20).reset_index(drop=True)
+    n = len(pivot)
+
+    fig = go.Figure()
+    for i, row in pivot.iterrows():
+        y = n - 1 - i
+        pc = PARTY_COLORS.get(row["party"], "#A0A0B0")
+        label = f"{_clean_mp_name(row['mp_name'])} ({PARTY_ABBREV.get(row['party'], '?')})"
+
+        if row["Pro-CCUS"] > 0:
+            fig.add_shape(type="line", x0=0, x1=row["Pro-CCUS"], y0=y, y1=y,
+                          line=dict(color=STANCE_COLORS["Pro-CCUS"], width=3))
+            fig.add_trace(go.Scatter(x=[row["Pro-CCUS"]], y=[y], mode="markers",
+                                     marker=dict(color=pc, size=10, line=dict(color="white", width=1.5)),
+                                     hovertemplate=f"<b>{label}</b><br>Pro-CCUS: {row['Pro-CCUS']}<extra></extra>",
+                                     showlegend=False))
+        if row["Anti-CCUS"] > 0:
+            fig.add_shape(type="line", x0=-row["Anti-CCUS"], x1=0, y0=y, y1=y,
+                          line=dict(color=STANCE_COLORS["Anti-CCUS"], width=3))
+            fig.add_trace(go.Scatter(x=[-row["Anti-CCUS"]], y=[y], mode="markers",
+                                     marker=dict(color=pc, size=10, line=dict(color="white", width=1.5)),
+                                     hovertemplate=f"<b>{label}</b><br>Anti-CCUS: {row['Anti-CCUS']}<extra></extra>",
+                                     showlegend=False))
+        if row["Conditional"] > 0:
+            fig.add_trace(go.Scatter(x=[0], y=[y + 0.33], mode="markers",
+                                     marker=dict(color=STANCE_COLORS["Conditional"], size=8, symbol="diamond"),
+                                     hovertemplate=f"<b>{label}</b><br>Conditional: {row['Conditional']}<extra></extra>",
+                                     showlegend=False))
+        # Centered label annotation
+        fig.add_annotation(x=0, y=y, text=label, showarrow=False,
+                           font=dict(color=pc, size=11), bgcolor=PANEL_BG,
+                           borderpad=3, opacity=0.9, xanchor="center", yanchor="middle")
+
+    fig.add_vline(x=0, line_color="white", line_width=1.5, opacity=0.4)
+    mx = max(pivot["Pro-CCUS"].max(), pivot["Anti-CCUS"].max(), 1)
+    fig.update_layout(
+        **_plotly_layout(
+            title=dict(text="Parliamentary Engagement with Federal CCUS Legislation by MP and Stance",
+                       font=dict(size=15, color="white")),
+            xaxis=dict(range=[-mx * 1.5, mx * 1.35], gridcolor=GRID, zerolinecolor=GRID,
+                       title=dict(text="← ANTI   |   CONDITIONAL   |   PRO →",
+                                  font=dict(size=13, color="#CCCCDD"))),
+            yaxis=dict(visible=False, range=[-0.5, n - 0.5]),
+            height=max(500, n * 35 + 100),
+        )
+    )
+    _write_interactive(fig, "vis_01_mp_lollipop")
+
+
+def _iplot_02_party_stance(party_df: pd.DataFrame) -> None:
+    """Interactive stacked bar: stance by party."""
+    try:
+        import plotly.graph_objects as go
+    except ImportError:
+        return
+
+    pivot = party_df.pivot_table(index="party", columns="stance",
+                                 values="proportion", fill_value=0)
+    for col in ["Pro-CCUS", "Conditional", "Anti-CCUS"]:
+        if col not in pivot.columns:
+            pivot[col] = 0
+    pivot = pivot.reindex(pivot["Pro-CCUS"].sort_values().index)
+    counts = party_df.groupby("party")["count"].sum()
+
+    fig = go.Figure()
+    for stance in ["Pro-CCUS", "Conditional", "Anti-CCUS"]:
+        fig.add_trace(go.Bar(
+            y=pivot.index.tolist(),
+            x=pivot[stance].tolist(),
+            name=stance,
+            orientation="h",
+            marker_color=STANCE_COLORS.get(stance, "#A0A0B0"),
+            hovertemplate="%{y}: %{x:.0%}<extra>" + stance + "</extra>",
+        ))
+
+    fig.update_layout(
+        **_plotly_layout(
+            title=dict(text="Party-Level Positioning on Federal CCUS Legislation",
+                       font=dict(size=15, color="white")),
+            barmode="stack",
+            xaxis=dict(tickformat=".0%", range=[0, 1.12], gridcolor=GRID, title="Proportion"),
+            yaxis=dict(gridcolor=GRID),
+            legend=dict(orientation="h", yanchor="bottom", y=-0.2, x=0.5, xanchor="center"),
+            height=400,
+        )
+    )
+    _write_interactive(fig, "vis_02_party_stance")
+
+
+def _iplot_04_radar(speeches_df: pd.DataFrame) -> None:
+    """Interactive radar chart: frame prevalence by stance."""
+    try:
+        import plotly.graph_objects as go
+    except ImportError:
+        return
+
+    fig = go.Figure()
+    for stance, color in [("Pro-CCUS", STANCE_COLORS["Pro-CCUS"]),
+                           ("Anti-CCUS", STANCE_COLORS["Anti-CCUS"])]:
+        sub    = speeches_df[speeches_df["stance"] == stance]
+        counts = [sub[sub["primary_frame"] == f]["speech_count"].sum() for f in FRAMES]
+        mx     = max(counts) or 1
+        vals   = [c / mx for c in counts]
+        fig.add_trace(go.Scatterpolar(
+            r=vals + [vals[0]],
+            theta=FRAMES + [FRAMES[0]],
+            fill="toself",
+            name=stance,
+            line=dict(color=color, width=2.5),
+            fillcolor=_hex_rgba(color, 0.2),
+        ))
+
+    fig.update_layout(
+        **_plotly_layout(
+            polar=dict(
+                bgcolor=PANEL_BG,
+                radialaxis=dict(visible=True, range=[0, 1], gridcolor=GRID, color="#AAAACC"),
+                angularaxis=dict(gridcolor=GRID, color="#CCCCDD"),
+            ),
+            title=dict(text="Argument Frame Composition: Pro-CCUS vs Anti-CCUS",
+                       font=dict(size=15, color="white")),
+            legend=dict(orientation="h", yanchor="bottom", y=-0.15, x=0.5, xanchor="center"),
+            height=550,
+        )
+    )
+    _write_interactive(fig, "vis_04_radar_frames")
+
+
+def _iplot_05_sankey(speeches_df: pd.DataFrame) -> None:
+    """Interactive Sankey: party → stance → frame.  (Re-uses existing plot_05 logic.)"""
+    try:
+        import plotly.graph_objects as go
+    except ImportError:
+        return
+
+    parties_present = [p for p in PARTIES if p in speeches_df["party"].unique()]
+    stances_present = [s for s in ["Pro-CCUS", "Anti-CCUS", "Conditional"]
+                       if s in speeches_df["stance"].unique()]
+    all_nodes = parties_present + stances_present + FRAMES
+    node_idx  = {n: i for i, n in enumerate(all_nodes)}
+
+    sources, targets, values, link_colors = [], [], [], []
+    for _, row in speeches_df.groupby(["party", "stance"])["speech_count"].sum().reset_index().iterrows():
+        if row["party"] in node_idx and row["stance"] in node_idx:
+            sources.append(node_idx[row["party"]])
+            targets.append(node_idx[row["stance"]])
+            values.append(int(row["speech_count"]))
+            link_colors.append(_hex_rgba(PARTY_COLORS.get(row["party"], "#A0A0B0")))
+    for _, row in speeches_df.groupby(["stance", "primary_frame"])["speech_count"].sum().reset_index().iterrows():
+        if row["stance"] in node_idx and row["primary_frame"] in node_idx:
+            sources.append(node_idx[row["stance"]])
+            targets.append(node_idx[row["primary_frame"]])
+            values.append(int(row["speech_count"]))
+            link_colors.append(_hex_rgba(STANCE_COLORS.get(row["stance"], "#A0A0B0")))
+
+    node_colors = (
+        [PARTY_COLORS.get(p, "#A0A0B0")  for p in parties_present] +
+        [STANCE_COLORS.get(s, "#A0A0B0") for s in stances_present] +
+        [FRAME_COLORS.get(f, "#A0A0B0")  for f in FRAMES]
+    )
+    fig = go.Figure(go.Sankey(
+        node=dict(pad=15, thickness=20, label=all_nodes, color=node_colors,
+                  line=dict(color=BG, width=0.5)),
+        link=dict(source=sources, target=targets, value=values, color=link_colors),
+    ))
+    fig.update_layout(
+        **_plotly_layout(
+            title=dict(text="Flow of CCUS Legislative Discourse: Party → Position → Argument Frame",
+                       font=dict(size=15, color="white")),
+            height=700, margin=dict(l=120, r=120, t=80, b=40),
+        )
+    )
+    _write_interactive(fig, "vis_05_sankey")
+
+
+def _iplot_06_faceted_frames(speeches_df: pd.DataFrame) -> None:
+    """Interactive faceted bar: frame frequency by party."""
+    try:
+        import plotly.graph_objects as go
+        from plotly.subplots import make_subplots
+    except ImportError:
+        return
+
+    parties_with_data = [p for p in PARTIES if p in speeches_df["party"].unique()]
+    ncols = 3
+    nrows = (len(parties_with_data) + ncols - 1) // ncols
+    fig = make_subplots(rows=nrows, cols=ncols,
+                        subplot_titles=[f"<b>{p}</b>" for p in parties_with_data],
+                        horizontal_spacing=0.08, vertical_spacing=0.15)
+
+    for idx, party in enumerate(parties_with_data):
+        row_idx = idx // ncols + 1
+        col_idx = idx % ncols + 1
+        sub    = speeches_df[speeches_df["party"] == party]
+        counts = (sub.groupby("primary_frame")["speech_count"].sum()
+                  .reindex(FRAMES, fill_value=0).sort_values())
+        fig.add_trace(go.Bar(
+            y=counts.index.tolist(), x=counts.values.tolist(),
+            orientation="h",
+            marker_color=[FRAME_COLORS.get(f, "#A0A0B0") for f in counts.index],
+            showlegend=False,
+            hovertemplate="%{y}: %{x}<extra>" + party + "</extra>",
+        ), row=row_idx, col=col_idx)
+
+        # Colour the subplot title to match party colour
+        title_idx = idx
+        if title_idx < len(fig.layout.annotations):
+            fig.layout.annotations[title_idx].font.color = PARTY_COLORS.get(party, "#CCCCDD")
+
+    fig.update_layout(
+        **_plotly_layout(
+            title=dict(text="Argument Frame Distribution by Party",
+                       font=dict(size=15, color="white")),
+            height=550,
+        )
+    )
+    fig.update_xaxes(gridcolor=GRID)
+    fig.update_yaxes(gridcolor=GRID)
+    _write_interactive(fig, "vis_06_faceted_frames")
+
+
+def _iplot_07_cooccurrence(speeches_df: pd.DataFrame) -> None:
+    """Interactive co-occurrence heatmap."""
+    try:
+        import plotly.graph_objects as go
+    except ImportError:
+        return
+
+    fi  = {f: i for i, f in enumerate(FRAMES)}
+    mat = np.zeros((len(FRAMES), len(FRAMES)))
+    for _, row in speeches_df.iterrows():
+        fs = [f for f in (row["frames"] if isinstance(row["frames"], list) else [row["frames"]])
+              if f in fi]
+        for f1, f2 in itertools.combinations(fs, 2):
+            i, j = fi[f1], fi[f2]
+            mat[i][j] += row["speech_count"]
+            mat[j][i] += row["speech_count"]
+        for f in fs:
+            mat[fi[f]][fi[f]] += row["speech_count"]
+
+    # Lower triangle only
+    display = np.where(np.tril(np.ones_like(mat, dtype=bool)), mat, None)
+
+    fig = go.Figure(go.Heatmap(
+        z=display.tolist(),
+        x=FRAMES, y=FRAMES,
+        colorscale=[[0, "#1A1A2E"], [0.5, "#7B5EA7"], [1, "#F7C59F"]],
+        text=[[f"{int(v)}" if v is not None else "" for v in row] for row in display],
+        texttemplate="%{text}",
+        hovertemplate="<b>%{y} × %{x}</b><br>Count: %{z}<extra></extra>",
+        showscale=True,
+        colorbar=dict(title=dict(text="Count", font=dict(color="#CCCCDD")), tickfont=dict(color="#CCCCDD")),
+    ))
+    fig.update_layout(
+        **_plotly_layout(
+            title=dict(text="Argument Frame Co-occurrence in CCUS Legislative Debates",
+                       font=dict(size=15, color="white")),
+            xaxis=dict(side="bottom", tickangle=30,
+                       tickfont=dict(color="#CCCCDD"), gridcolor=GRID),
+            yaxis=dict(tickfont=dict(color="#CCCCDD"), gridcolor=GRID, autorange="reversed"),
+            height=500,
+        )
+    )
+    _write_interactive(fig, "vis_07_cooccurrence")
+
+
+def _iplot_09_wordcloud_table(speeches_df: pd.DataFrame) -> None:
+    """Interactive word-weight table by frame (word clouds can't be interactive in Plotly)."""
+    try:
+        import plotly.graph_objects as go
+        from plotly.subplots import make_subplots
+        from sklearn.feature_extraction.text import TfidfVectorizer
+    except ImportError:
+        return
+
+    ncols = 3
+    nrows = 2
+    fig = make_subplots(rows=nrows, cols=ncols,
+                        subplot_titles=[f"<b>{f}</b>" for f in FRAMES],
+                        horizontal_spacing=0.06, vertical_spacing=0.18)
+
+    for idx, frame in enumerate(FRAMES):
+        row_idx = idx // ncols + 1
+        col_idx = idx % ncols + 1
+        corpus  = list(speeches_df[speeches_df["primary_frame"] == frame]["text_excerpt"].dropna())
+        if not corpus:
+            continue
+        try:
+            vec = TfidfVectorizer(max_features=15, stop_words="english")
+            vec.fit(corpus)
+            scores = dict(zip(vec.get_feature_names_out(),
+                               vec.transform(corpus).mean(axis=0).A1))
+            scores = {w: v for w, v in scores.items() if v > 0}
+        except Exception:
+            scores = {}
+        if not scores:
+            continue
+
+        top = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:12]
+        words, weights = zip(*top) if top else ([], [])
+        color = FRAME_COLORS.get(frame, "#CCCCDD")
+        fig.add_trace(go.Bar(
+            y=list(words), x=list(weights), orientation="h",
+            marker_color=color, showlegend=False,
+            hovertemplate="%{y}: %{x:.3f}<extra>" + frame + "</extra>",
+        ), row=row_idx, col=col_idx)
+        fig.layout.annotations[idx].font.color = color
+
+    fig.update_layout(
+        **_plotly_layout(
+            title=dict(text="Top Keywords by Argument Frame (TF-IDF weight)",
+                       font=dict(size=15, color="white")),
+            height=600,
+        )
+    )
+    fig.update_xaxes(gridcolor=GRID)
+    fig.update_yaxes(gridcolor=GRID)
+    _write_interactive(fig, "vis_09_wordclouds")
+
+
+# ─── Dashboard assembly ──────────────────────────────────────────────────────
+
+_DASHBOARD_PLOTS = [
+    ("vis_01_mp_lollipop",    "MP Speaking Frequency & Stance",       "01 MP Lollipop"),
+    ("vis_02_party_stance",   "Party-Level CCUS Positioning",         "02 Party Stance"),
+    ("vis_04_radar_frames",   "Frame Prevalence by Stance (Radar)",   "04 Radar Frames"),
+    ("vis_05_sankey",         "Discourse Flow: Party → Stance → Frame","05 Sankey"),
+    ("vis_06_faceted_frames", "Frame Distribution by Party",          "06 Faceted Frames"),
+    ("vis_07_cooccurrence",   "Frame Co-occurrence Heatmap",          "07 Co-occurrence"),
+    ("vis_09_wordclouds",     "Key Vocabulary by Argument Frame",     "09 Word Clouds"),
+]
+
+_DASHBOARD_CSS = """
+:root {
+  --bg:      #0F0F1A;
+  --panel:   #1A1A2E;
+  --grid:    #2A2A45;
+  --text:    #CCCCDD;
+  --accent:  #3EC9A7;
+  --card-r:  12px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Inter', system-ui, sans-serif;
+  min-height: 100vh;
+  padding: 2rem;
+}
+header {
+  border-bottom: 1px solid var(--grid);
+  padding-bottom: 1.2rem;
+  margin-bottom: 2rem;
+}
+header h1 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #fff;
+  letter-spacing: -0.02em;
+}
+header p {
+  font-size: 0.85rem;
+  color: #888;
+  margin-top: 0.35rem;
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 1.25rem;
+}
+.card {
+  background: var(--panel);
+  border: 1px solid var(--grid);
+  border-radius: var(--card-r);
+  overflow: hidden;
+  transition: border-color 0.2s, transform 0.2s;
+}
+.card:hover {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+}
+.card a {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+}
+.thumb-wrap {
+  position: relative;
+  overflow: hidden;
+  height: 200px;
+  background: var(--bg);
+}
+.thumb-wrap img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  opacity: 0.85;
+  transition: opacity 0.2s;
+}
+.card:hover .thumb-wrap img { opacity: 1; }
+.thumb-wrap .overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  background: rgba(15,15,26,0.6);
+  transition: opacity 0.2s;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+.card:hover .overlay { opacity: 1; }
+.card-body {
+  padding: 0.9rem 1rem;
+}
+.card-body h3 {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #fff;
+  margin-bottom: 0.25rem;
+}
+.card-body p {
+  font-size: 0.78rem;
+  color: #888;
+}
+footer {
+  margin-top: 3rem;
+  border-top: 1px solid var(--grid);
+  padding-top: 1.2rem;
+  font-size: 0.78rem;
+  color: #555;
+  text-align: center;
+}
+"""
+
+
+def plot_interactive_dashboard(
+    speeches_df: pd.DataFrame,
+    party_df: pd.DataFrame,
+    frame_df: pd.DataFrame,
+) -> None:
+    """
+    Build interactive Plotly HTML pages for plots 1, 2, 4, 5, 6, 7, 9, then
+    assemble a dark/sleek dashboard landing page at ``output/vis/dashboard.html``.
+
+    Each card shows the static PNG thumbnail (if present) linked to the
+    individual interactive HTML page.
+    """
+    try:
+        import plotly.graph_objects as go  # noqa: F401 — check plotly is installed
+    except ImportError:
+        print("  Skipping dashboard: plotly not installed (pip install plotly).")
+        return
+
+    print("  Building interactive HTML pages ...")
+    _iplot_01_lollipop(speeches_df)
+    _iplot_02_party_stance(party_df)
+    _iplot_04_radar(speeches_df)
+    _iplot_05_sankey(speeches_df)
+    _iplot_06_faceted_frames(speeches_df)
+    _iplot_07_cooccurrence(speeches_df)
+    _iplot_09_wordcloud_table(speeches_df)
+
+    # ── Build dashboard.html ─────────────────────────────────────────────────
+    cards_html = []
+    for slug, title, label in _DASHBOARD_PLOTS:
+        interactive_file = f"{slug}_interactive.html"
+        thumb_file       = f"{slug}.png"
+        thumb_exists     = (OUTPUT_DIR / thumb_file).exists()
+
+        thumb_tag = (
+            f'<img src="{thumb_file}" alt="{title}" loading="lazy">'
+            if thumb_exists
+            else f'<div style="height:200px;display:flex;align-items:center;'
+                 f'justify-content:center;color:#555;font-size:0.8rem;">'
+                 f'No preview</div>'
+        )
+        cards_html.append(f"""
+  <div class="card">
+    <a href="{interactive_file}" target="_blank">
+      <div class="thumb-wrap">
+        {thumb_tag}
+        <div class="overlay">Open interactive →</div>
+      </div>
+      <div class="card-body">
+        <h3>{title}</h3>
+        <p>{label}</p>
+      </div>
+    </a>
+  </div>""")
+
+    from datetime import datetime
+    generated = datetime.now().strftime("%Y-%m-%d %H:%M")
+    dashboard = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CCUS Legislative Debate — Interactive Dashboard</title>
+  <style>{_DASHBOARD_CSS}</style>
+</head>
+<body>
+  <header>
+    <h1>CCUS Legislative Debate Dashboard</h1>
+    <p>Interactive visualizations of Canadian parliamentary discourse on carbon capture, utilization &amp; storage legislation. Generated {generated}.</p>
+  </header>
+  <main class="grid">{"".join(cards_html)}
+  </main>
+  <footer>OpenParliament CCUS Analysis Pipeline &nbsp;·&nbsp; Data via openparliament.ca</footer>
+</body>
+</html>
+"""
+    dash_path = OUTPUT_DIR / "dashboard.html"
+    dash_path.write_text(dashboard, encoding="utf-8")
+    print(f"  Saved {dash_path}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1075,6 +1700,14 @@ def _run_all_plots(speeches_df, party_df, frame_df) -> None:
             import traceback
             print(f"  ERROR: {exc}")
             traceback.print_exc()
+
+    print("\nPlot Interactive Dashboard ...")
+    try:
+        plot_interactive_dashboard(speeches_df, party_df, frame_df)
+    except Exception as exc:
+        import traceback
+        print(f"  ERROR: {exc}")
+        traceback.print_exc()
 
     print("\nDone.")
 
