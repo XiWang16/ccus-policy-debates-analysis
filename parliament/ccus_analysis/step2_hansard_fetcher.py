@@ -1,11 +1,14 @@
 import re
-import csv 
+import csv
 
 from pathlib import Path
 from lxml.html.clean import Cleaner
 
 from .api_client import OpenParliamentClient
 from .config import API_BASE_URL, JSON_DIR, CSV_DIR
+from .keywords import StaticCCUSKeywordProvider
+from .step1_bill_finder import _compile_pattern
+from .step2b_passage_extractor import CCUSPassageExtractor
 
 
 _html_cleaner = Cleaner(safe_attrs_only=True, remove_tags=["a", "span", "em", "strong", "b", "i"])
@@ -78,6 +81,10 @@ def _write_step2_speeches(
 
     client = OpenParliamentClient(base_url=base_url)
     fetcher = HansardFetcher(client=client)
+    extractor = CCUSPassageExtractor(
+        tier1_pattern=_compile_pattern(StaticCCUSKeywordProvider().get_keywords()),
+        use_semantic=True,
+    )
 
     out_path = json_dir / "step2_speeches.json"
 
@@ -88,6 +95,13 @@ def _write_step2_speeches(
     for rec in records:
         bill = rec["bill"]
         speeches = fetcher.get_speeches(bill)
+        extractor.annotate(speeches)
+        ccus_count = sum(1 for s in speeches if s.get("ccus_relevant"))
+        print(
+            f"[Step2]   {bill.get('number', '?')} ({bill.get('session', '?')}): "
+            f"{len(speeches)} speeches, {ccus_count} CCUS-relevant",
+            flush=True,
+        )
         rec_out = dict(rec)
         rec_out["speeches"] = speeches
         out_records.append(rec_out)

@@ -9,12 +9,26 @@ from .models import PoliticalActor
 
 class ActorExtractor:
     def extract(self, speeches: list[dict]) -> list[PoliticalActor]:
-        """Group speeches by politician_url; one PoliticalActor per unique politician."""
+        """
+        Group CCUS-relevant speeches by politician; one PoliticalActor per unique
+        politician.
+
+        If speeches have been annotated by CCUSPassageExtractor (i.e. they carry
+        a ``ccus_relevant`` key), only speeches where that flag is True are
+        considered.  Unannotated speeches (no ``ccus_relevant`` key) are all
+        included so that the extractor remains usable without the annotation step.
+
+        Actors with zero qualifying speeches after filtering are excluded entirely.
+        """
         actors: dict[str, PoliticalActor] = {}
         anonymous: list[dict] = []
 
         for speech in speeches:
             if speech.get("procedural"):
+                continue
+
+            # Respect passage-extractor annotations when present.
+            if "ccus_relevant" in speech and not speech["ccus_relevant"]:
                 continue
 
             politician_url = speech.get("politician_url") or speech.get("politician")

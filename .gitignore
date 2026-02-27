@@ -26,3 +26,9 @@ hansard-cache/
 *.code-workspace
 docker-compose.yml
 build
+# Editor settings
+.vscode/
+
+# Local databases
+db.sqlite3
+parliament.sqlite
