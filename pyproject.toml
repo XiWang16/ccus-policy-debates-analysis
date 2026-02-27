@@ -29,6 +29,7 @@ dependencies = [
     "kaleido>=1.2.0",
     "wordcloud>=1.9.6",
     "scikit-learn>=1.8.0",
+    "sentence-transformers>=5.2.3",
 ]
 
 [tool.pyright]
