@@ -232,6 +232,7 @@ def _write_step4_opinions(
 
     # Helper to rewrite JSON and CSV after each bill so partial progress is saved.
     csv_path = csv_dir / "step4_opinions.csv"
+    args_path = csv_dir / "step4_arguments.csv"
     fieldnames = [
         "manual_number",
         "manual_session",
@@ -243,6 +244,21 @@ def _write_step4_opinions(
         "stance",
         "confidence",
         "argument_count",
+    ]
+    arg_fieldnames = [
+        "manual_number",
+        "manual_session",
+        "session",
+        "bill_number",
+        "actor_name",
+        "politician_url",
+        "party",
+        "stance",
+        "confidence",
+        "arg_index",
+        "arg_type",
+        "arg_text",
+        "arg_quote",
     ]
 
     def _rewrite_outputs() -> None:
@@ -268,6 +284,32 @@ def _write_step4_opinions(
                             "argument_count": len(op.get("arguments", [])),
                         }
                     )
+        # Per-argument CSV: one row per LLM-identified argument with type, text, quote.
+        with args_path.open("w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=arg_fieldnames)
+            writer.writeheader()
+            for rec in out_records:
+                bill = rec["bill"]
+                for op in rec.get("opinions", []):
+                    actor = op.get("actor", {})
+                    for idx, arg in enumerate(op.get("arguments", []), 1):
+                        writer.writerow(
+                            {
+                                "manual_number": rec["manual_number"],
+                                "manual_session": rec["manual_session"],
+                                "session": bill.get("session", ""),
+                                "bill_number": bill.get("number", ""),
+                                "actor_name": actor.get("name", ""),
+                                "politician_url": actor.get("politician_url", ""),
+                                "party": actor.get("party") or "",
+                                "stance": op.get("stance", ""),
+                                "confidence": op.get("confidence", ""),
+                                "arg_index": idx,
+                                "arg_type": arg.get("type", ""),
+                                "arg_text": arg.get("text", ""),
+                                "arg_quote": arg.get("quote", ""),
+                            }
+                        )
 
     records = records[:3]
     print(f"[Step4] Classifying opinions for {len(records)} bill entr(y/ies)...", flush=True)
@@ -327,7 +369,7 @@ def _write_step4_opinions(
         _rewrite_outputs()
 
     print(
-        f"[Step4] Wrote opinions for {len(out_records)} bill entr(y/ies) to {out_path} and {csv_path}",
+        f"[Step4] Wrote opinions for {len(out_records)} bill entr(y/ies) to {out_path}, {csv_path}, and {args_path}",
         flush=True,
     )
 

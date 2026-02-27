@@ -132,11 +132,68 @@ def _write_step2_speeches(
                 }
             )
 
+    # Detailed CSV: one row per speech with CCUS annotation fields.
+    detail_path = csv_dir / "step2_speeches_detail.csv"
+    detail_fields = [
+        "manual_number",
+        "manual_session",
+        "session",
+        "bill_number",
+        "speech_url",
+        "document_url",
+        "time",
+        "politician_url",
+        "attribution_en",
+        "procedural",
+        "ccus_relevant",
+        "ccus_match_type",
+        "ccus_passage_count",
+        "ccus_factual_passage_count",
+    ]
+    with detail_path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=detail_fields)
+        writer.writeheader()
+        for rec in out_records:
+            bill = rec["bill"]
+            for speech in rec.get("speeches", []):
+                attribution = speech.get("attribution") or {}
+                attr_en = (
+                    attribution.get("en", "")
+                    if isinstance(attribution, dict)
+                    else str(attribution)
+                )
+                writer.writerow(
+                    {
+                        "manual_number": rec["manual_number"],
+                        "manual_session": rec["manual_session"],
+                        "session": bill.get("session", ""),
+                        "bill_number": bill.get("number", ""),
+                        "speech_url": speech.get("url", ""),
+                        "document_url": speech.get("document_url", ""),
+                        "time": speech.get("time", ""),
+                        "politician_url": speech.get("politician_url", ""),
+                        "attribution_en": attr_en,
+                        "procedural": speech.get("procedural", False),
+                        "ccus_relevant": speech.get("ccus_relevant", False),
+                        "ccus_match_type": speech.get("ccus_match_type", ""),
+                        "ccus_passage_count": len(speech.get("ccus_passages") or []),
+                        "ccus_factual_passage_count": len(speech.get("ccus_factual_passages") or []),
+                    }
+                )
+
     print(
-        f"[Step2] Wrote speeches for {len(out_records)} bill entr(y/ies) to {out_path} and {csv_path}",
+        f"[Step2] Wrote speeches for {len(out_records)} bill entr(y/ies) to {out_path}, {csv_path}, and {detail_path}",
         flush=True,
     )
 
 
-if __name__ == "__main__":
+def _main_cli() -> None:
+    import os
+    import django
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "parliament.settings")
+    django.setup()
     _write_step2_speeches()
+
+
+if __name__ == "__main__":
+    _main_cli()

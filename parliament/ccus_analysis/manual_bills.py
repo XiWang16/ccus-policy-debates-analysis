@@ -18,6 +18,7 @@ import re
 MANUAL_CCUS_BILL_NUMBERS: list[str] = [
     "S-243/44-1",  # Climate-Aligned Finance Act
     "C-262/43-2",  # An Act to amend the Income Tax Act (capture and utilization or storage of carbon dioxide)
+    "C-19/44-1",   # Budget Implementation Act, 2022, No. 1 (introduced CCUS Investment Tax Credit)
     "C-50/39-2",   # Budget Implementation Act 2007 (contains CCUS provisions)
     "C-59/44-1",   # Fall Economic Statement Implementation Act 2023 (CCUS ITC provisions)
     "C-69/42-1",   # Impact Assessment Act

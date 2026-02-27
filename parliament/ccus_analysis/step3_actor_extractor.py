@@ -205,5 +205,13 @@ def _write_step3_actors(
     )
 
 
-if __name__ == "__main__":
+def _main_cli() -> None:
+    import os
+    import django
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "parliament.settings")
+    django.setup()
     _write_step3_actors()
+
+
+if __name__ == "__main__":
+    _main_cli()
