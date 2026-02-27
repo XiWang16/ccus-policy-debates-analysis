@@ -1,7 +1,10 @@
+import csv
 import re
+from pathlib import Path
 
 from .api_client import OpenParliamentClient
 from .keywords import KeywordProvider
+from .config import API_BASE_URL, JSON_DIR, CSV_DIR
 
 
 def _compile_patterns(keywords: list[str]) -> list[re.Pattern]:
@@ -120,3 +123,102 @@ class CCUSBillFinder:
                 if lang_text and any(p.search(lang_text) for p in patterns):
                     return True
         return False
+
+
+# ---------------------------------------------------------------------------
+# CLI helper
+# ---------------------------------------------------------------------------
+
+def _write_step1_bills(
+    base_url: str = API_BASE_URL,
+    output_dir: Path | None = None,
+) -> None:
+    """
+    Resolve the manually-curated CCUS bill list against the API and write the
+    matched bill records to ``{output_dir}/step1_bills.json`` and a CSV
+    summary.
+
+    This is a standalone entry point so that you can run just the "bill
+    identification" step of the pipeline and inspect the results.
+    """
+    import json
+    from .keywords import StaticCCUSKeywordProvider
+    from .manual_bills import get_manual_bill_entries
+
+    client = OpenParliamentClient(base_url=base_url)
+    keyword_provider = StaticCCUSKeywordProvider()
+    finder = CCUSBillFinder(client=client, keyword_provider=keyword_provider, search_full_text=False)
+
+    root = Path(output_dir) if output_dir is not None else JSON_DIR.parent
+    json_dir = root / "json"
+    csv_dir = root / "csv"
+    json_dir.mkdir(parents=True, exist_ok=True)
+    csv_dir.mkdir(parents=True, exist_ok=True)
+    out_path = json_dir / "step1_bills.json"
+
+    records: list[dict] = []
+    entries = get_manual_bill_entries()
+
+    print(f"[Step1] Resolving {len(entries)} manual bill entr(y/ies) against the API...", flush=True)
+
+    for number, pinned_session in entries:
+        found = finder.find_by_number(number)
+        if pinned_session:
+            found = [b for b in found if b.get("session") == pinned_session]
+        if not found:
+            suffix = f" in session {pinned_session}" if pinned_session else ""
+            print(
+                f"[Step1] WARNING: No bills found for {number}{suffix}",
+                flush=True,
+            )
+            continue
+        for bill in found:
+            records.append(
+                {
+                    "manual_number": number,
+                    "manual_session": pinned_session,
+                    "bill": bill,
+                }
+            )
+
+    out_path.write_text(json.dumps(records, ensure_ascii=False, indent=2))
+
+    # CSV summary: one row per bill.
+    csv_path = csv_dir / "step1_bills.csv"
+    fieldnames = [
+        "manual_number",
+        "manual_session",
+        "session",
+        "bill_number",
+        "introduced",
+        "name_en",
+        "name_fr",
+        "url",
+    ]
+    with csv_path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for rec in records:
+            bill = rec["bill"]
+            name = bill.get("name") or {}
+            writer.writerow(
+                {
+                    "manual_number": rec["manual_number"],
+                    "manual_session": rec["manual_session"],
+                    "session": bill.get("session", ""),
+                    "bill_number": bill.get("number", ""),
+                    "introduced": bill.get("introduced", ""),
+                    "name_en": name.get("en", ""),
+                    "name_fr": name.get("fr", ""),
+                    "url": bill.get("url", ""),
+                }
+            )
+
+    print(
+        f"[Step1] Wrote {len(records)} record(s) to {out_path} and {csv_path}",
+        flush=True,
+    )
+
+
+if __name__ == "__main__":
+    _write_step1_bills()

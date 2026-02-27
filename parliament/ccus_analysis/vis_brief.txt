@@ -1,0 +1,572 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2822
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\froman\fcharset0 Times-Roman;}
+{\colortbl;\red255\green255\blue255;\red0\green0\blue0;}
+{\*\expandedcolortbl;;\cssrgb\c0\c0\c0;}
+\margl1440\margr1440\vieww11520\viewh8400\viewkind0
+\deftab720
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f0\fs24 \cf0 \expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 ## Claude Code Implementation Brief: CCUS Parliamentary Debate Visualizations\
+\
+---\
+\
+### Global Design System (apply to ALL plots)\
+\
+```\
+FONT FAMILY: "Inter" or fallback to "DejaVu Sans"\
+BASE FIGURE DPI: 150\
+BACKGROUND: #0F0F1A (near-black, dark mode)\
+PANEL/AXES BACKGROUND: #1A1A2E\
+GRID COLOR: #2A2A45, linewidth=0.5, linestyle='--', alpha=0.5\
+TITLE COLOR: #FFFFFF, fontsize=14, fontweight='bold'\
+AXIS LABEL COLOR: #CCCCDD, fontsize=11\
+TICK LABEL COLOR: #AAAACC, fontsize=9\
+SPINE COLOR: remove all spines except bottom and left; set those to #2A2A45\
+\
+PARTY COLOR PALETTE (use EXACTLY these hex codes consistently across all plots):\
+  Liberal:            #E8333C\
+  Conservative:       #1D6FCA\
+  NDP:                #F4742B\
+  Bloc Qu\'e9b\'e9cois:     #7B5EA7\
+  Green:              #3DBF6E\
+  Independent:        #A0A0B0\
+\
+STANCE COLOR PALETTE:\
+  Pro-CCUS:           #3EC9A7  (teal-green)\
+  Anti-CCUS:          #FF6B6B  (coral-red)\
+  Conditional:        #FFD166  (amber)\
+  Neutral:            #A0A0B0  (grey)\
+\
+FRAME COLOR PALETTE (for argument frames, use sequentially):\
+  Economic:           #F7C59F\
+  Environmental:      #6EE7B7\
+  Technological:      #93C5FD\
+  Regional:           #C4B5FD\
+  Social/Justice:     #FCA5A5\
+\
+SAVE FORMAT: PNG at 150 DPI and SVG for each figure\
+OUTPUT PATH: /mnt/user-data/outputs/vis_\{plot_number\}_\{name\}.png\
+```\
+\
+**Install dependencies first:**\
+```bash\
+pip install matplotlib seaborn plotly pandas numpy wordcloud scipy --break-system-packages\
+```\
+\
+---\
+\
+### Input Data Schema\
+\
+All 10 plots draw from the same three mock DataFrames. Generate synthetic but realistic mock data based on the following schemas if real data is not provided.\
+\
+```python\
+# DataFrame 1: speeches_df\
+# One row per speech segment (unit of analysis)\
+columns = [\
+    'mp_name',          # str: "Greg McLean"\
+    'party',            # str: one of the six party names above\
+    'province',         # str: "Alberta"\
+    'riding',           # str: "Calgary Centre"\
+    'bill',             # str: "C-59", "C-69", "C-262", "Committee"\
+    'parliament',       # str: "44-1", "43-2"\
+    'date',             # datetime\
+    'stance',           # str: "Pro-CCUS", "Anti-CCUS", "Conditional"\
+    'speech_count',     # int: number of speeches by this MP on this bill\
+    'word_count',       # int\
+    'frames',           # list[str]: e.g. ["Economic", "Technological"]\
+    'primary_frame',    # str: dominant single frame\
+    'text_excerpt'      # str: short excerpt for word cloud input\
+]\
+\
+# DataFrame 2: party_df\
+# Aggregated stance counts by party\
+columns = ['party', 'stance', 'count', 'proportion']\
+\
+# DataFrame 3: frame_df\
+# Frame co-occurrence matrix \'97 NxN where N = number of frames\
+# Index and columns are frame names; values are co-occurrence counts\
+```\
+\
+---\
+\
+### Plot 1: Diverging Lollipop Chart \'97 MP Speaking Frequency \'d7 Stance\
+\
+**File:** `vis_01_mp_lollipop.png`\
+\
+**What it shows:** Each MP is a horizontal row. The lollipop extends right for pro-CCUS speech count, left for anti-CCUS. Dot color encodes party. A vertical zero line divides pro/anti. MPs sorted by total speech count descending. Show top 20 MPs only.\
+\
+**Inputs:** `speeches_df` \'97 aggregate by `mp_name` to get `pro_count`, `anti_count`, `conditional_count`, `party`\
+\
+**Libraries:** `matplotlib`, `pandas`\
+\
+**Implementation instructions:**\
+```\
+1. Aggregate speeches_df: for each mp_name, sum speech_count grouped by stance.\
+   Pivot to get columns: mp_name, party, pro_count, anti_count, conditional_count.\
+   Compute total = pro_count + anti_count + conditional_count.\
+   Sort descending by total. Keep top 20.\
+\
+2. Figure size: (12, 10). Dark background per design system.\
+\
+3. For each MP row (y = index position):\
+   - Draw horizontal line from 0 to +pro_count in color #3EC9A7 (Pro), lw=2.5\
+   - Draw horizontal line from 0 to -anti_count in color #FF6B6B (Anti), lw=2.5\
+   - Draw circle marker at x=pro_count, size=80, color=PARTY_COLOR[party], \
+     edgecolor='white', linewidth=1.2, zorder=5\
+   - Draw circle marker at x=-anti_count, size=80, color=PARTY_COLOR[party],\
+     edgecolor='white', linewidth=1.2, zorder=5\
+   - If conditional_count > 0, draw diamond marker at x=0, y=row_y + 0.25,\
+     size=40, color=#FFD166\
+\
+4. Y-axis: MP names. Format as "Lastname (PARTY_ABBREV)" e.g. "McLean (CPC)"\
+   Party abbreviation in matching party color using ax.get_yticklabels() coloring.\
+\
+5. X-axis: label "\uc0\u8592  Anti-CCUS   |   Pro-CCUS \u8594 ". Symmetric range.\
+   Draw thick vertical line at x=0, color='white', lw=1.5, alpha=0.4.\
+\
+6. Add annotation "Speech count" at top right, small font.\
+\
+7. Legend: two entries \'97 "Pro-CCUS" (teal line+dot) and "Anti-CCUS" (coral line+dot).\
+   Place legend inside axes at upper left. \
+   Add second small legend for party colors using custom patches.\
+\
+8. Title: "Parliamentary Engagement with Federal CCUS Legislation\\nby MP and Stance"\
+```\
+\
+---\
+\
+### Plot 2: Stacked Proportion Bar Chart \'97 Stance by Party\
+\
+**File:** `vis_02_party_stance.png`\
+\
+**What it shows:** One horizontal bar per party, showing proportional breakdown of Pro / Anti / Conditional speech segments. Parties sorted by proportion of pro-CCUS descending. Total speech count annotated at right end of each bar.\
+\
+**Inputs:** `party_df` with columns `party`, `stance`, `proportion`, `count`\
+\
+**Libraries:** `matplotlib`, `pandas`\
+\
+**Implementation instructions:**\
+```\
+1. Figure size: (11, 6). Dark background.\
+\
+2. Horizontal stacked bar chart using ax.barh().\
+   Layer order left to right: Pro-CCUS (#3EC9A7), Conditional (#FFD166), Anti-CCUS (#FF6B6B).\
+   Bar height: 0.55. Edge color: background color (creates separation illusion).\
+\
+3. For each party bar:\
+   - Annotate proportion % inside each segment if segment width > 0.07.\
+     Font color: #0F0F1A (dark), fontsize=9, fontweight='bold', ha='center'.\
+   - Annotate total speech count (n=X) just outside the right end of bar.\
+     Font color: #CCCCDD, fontsize=9.\
+\
+4. Y-axis: party names. Color each tick label with PARTY_COLOR[party].\
+   Add small colored square patch (8x8pt) before each party name using annotate().\
+\
+5. X-axis: format as percentage 0\'96100%. Label: "Proportion of CCUS Speech Segments".\
+\
+6. Add vertical reference line at x=0.5 (50%), color='white', lw=1, alpha=0.3, linestyle=':'.\
+\
+7. Legend at bottom: Pro-CCUS | Conditional | Anti-CCUS. Horizontal layout.\
+\
+8. Title: "Party-Level Positioning on Federal CCUS Legislation"\
+   Subtitle in smaller font below: "Proportion of speech segments by expressed stance"\
+```\
+\
+---\
+\
+### Plot 3: MP \'d7 Bill Heatmap \'97 Engagement Breadth\
+\
+**File:** `vis_03_mp_bill_heatmap.png`\
+\
+**What it shows:** Rows = top 25 MPs, Columns = bills/venues (C-59, C-69, C-262, RNNR Committee, FINA Committee). Cell intensity = speech count. Rows grouped by party with a colored sidebar strip.\
+\
+**Inputs:** `speeches_df` \'97 pivot table: index=mp_name, columns=bill, values=speech_count (sum)\
+\
+**Libraries:** `seaborn`, `matplotlib`, `pandas`\
+\
+**Implementation instructions:**\
+```\
+1. Figure size: (13, 11). Dark background.\
+\
+2. Pivot speeches_df. Fill NaN with 0. Sort rows by party then total count.\
+   Keep top 25 MPs.\
+\
+3. Main heatmap using seaborn.heatmap():\
+   - cmap: custom colormap from #1A1A2E (zero) \uc0\u8594  #1B6CA8 (mid) \u8594  #3EC9A7 (high).\
+     Build with matplotlib.colors.LinearSegmentedColormap.from_list().\
+   - annot=True, fmt='d' (show integer counts in cells).\
+   - annot_kws: fontsize=9, color='white'.\
+   - linewidths=0.5, linecolor='#0F0F1A'.\
+   - cbar label: "Speech Count".\
+\
+4. Party sidebar: add a 0.3-inch wide axes strip on the left of the heatmap.\
+   For each MP row, fill a colored rectangle using PARTY_COLOR[party].\
+   No tick labels on sidebar. Add party abbreviation text centered in each \
+   contiguous party block.\
+\
+5. Add horizontal separator lines between party groups: white line, lw=1.5, alpha=0.5.\
+\
+6. X-axis labels at top (rotate 0\'b0). Y-axis: MP names as "Lastname (Province)".\
+\
+7. Colorbar on right, vertical, label: "Number of Speeches".\
+\
+8. Title: "CCUS Legislative Engagement by MP and Bill/Venue"\
+```\
+\
+---\
+\
+### Plot 4: Radar / Spider Chart \'97 Frame Prevalence by Stance\
+\
+**File:** `vis_04_radar_frames.png`\
+\
+**What it shows:** Two overlapping spider polygons \'97 one for pro-CCUS speech, one for anti-CCUS. Each axis is one argument frame. Shows compositional difference in how each side argues.\
+\
+**Inputs:** `speeches_df` \'97 for each stance, count how many speeches use each frame. Normalize to proportions.\
+\
+**Libraries:** `matplotlib`, `numpy`\
+\
+**Implementation instructions:**\
+```\
+1. Figure size: (9, 9). Dark background.\
+\
+2. Frames (axes): ["Economic", "Environmental", "Technological", "Regional", "Social/Justice"]\
+   N = 5 axes. Compute angle for each: angles = np.linspace(0, 2*pi, N, endpoint=False).\
+\
+3. For each stance (Pro-CCUS, Anti-CCUS):\
+   - Compute normalized frame prevalence (0\'961 scale, where 1 = most-used frame).\
+   - Close the polygon by appending first value.\
+   - ax.plot(angles_closed, values_closed, color=STANCE_COLOR, lw=2.5, alpha=0.9)\
+   - ax.fill(angles_closed, values_closed, color=STANCE_COLOR, alpha=0.25)\
+   - Add dot markers at each axis intersection: size=80.\
+\
+4. Axis lines: draw from center to edge for each frame axis.\
+   Color: #2A2A45, lw=1, zorder=0.\
+   Label each axis at its outer tip: frame name, color=#CCCCDD, fontsize=11.\
+   Offset labels slightly outward (multiply by 1.15) so they don't overlap polygon.\
+\
+5. Concentric circles at 0.25, 0.50, 0.75, 1.00 intervals.\
+   Color: #2A2A45, lw=0.5, linestyle='--'.\
+   Label the 0.5 ring with "50%" in small grey text.\
+\
+6. Remove all default matplotlib polar axis decorations (set theta gridlines off,\
+   r gridlines off, tick labels off).\
+\
+7. Legend at bottom center: Pro-CCUS (teal) | Anti-CCUS (coral).\
+\
+8. Title: "Argument Frame Composition\\nPro-CCUS vs. Anti-CCUS Legislative Discourse"\
+   Subtitle: "Normalized prevalence across speech segments"\
+```\
+\
+---\
+\
+### Plot 5: Sankey Diagram \'97 Party \uc0\u8594  Stance \u8594  Frame\
+\
+**File:** `vis_05_sankey.png`\
+\
+**What it shows:** Three-column flow: Party (left) \uc0\u8594  Stance (middle) \u8594  Dominant Frame (right). Flow width encodes speech frequency. This is the signature visualization of the whole set.\
+\
+**Inputs:** `speeches_df` \'97 group by `party`, `stance`, `primary_frame` and count.\
+\
+**Libraries:** `plotly` (Sankey trace), save as PNG using `plotly.io.write_image` with kaleido\
+\
+**Implementation instructions:**\
+```\
+pip install kaleido --break-system-packages\
+\
+1. Build node list in order: [all parties] + [Pro, Anti, Conditional] + [all frames]\
+   Assign each node an index.\
+\
+2. Build link list: each row in grouped df = one link with:\
+   source = party_index, target = stance_index, value = count, \
+   color = rgba version of PARTY_COLOR[party] at alpha=0.45\
+   \
+   Then second set of links:\
+   source = stance_index, target = frame_index, value = count,\
+   color = rgba version of STANCE_COLOR[stance] at alpha=0.45\
+\
+3. Node colors:\
+   Party nodes: PARTY_COLOR[party]\
+   Stance nodes: STANCE_COLOR[stance]\
+   Frame nodes: FRAME_COLOR[frame]\
+   Node thickness: 20. Pad: 15.\
+\
+4. Layout:\
+   paper_bgcolor='#0F0F1A', plot_bgcolor='#0F0F1A'\
+   font: color='#CCCCDD', size=12, family='Inter'\
+   width=1400, height=800\
+   margin: l=120, r=120, t=80, b=40\
+\
+5. Add column header annotations:\
+   "Party" at x=0.05, y=1.05\
+   "Stance" at x=0.50, y=1.05  \
+   "Dominant Frame" at x=0.95, y=1.05\
+   All in white, fontsize=13, fontweight='bold'\
+\
+6. Title: "Flow of CCUS Legislative Discourse: Party \uc0\u8594  Position \u8594  Argument Frame"\
+\
+7. Export: fig.write_image("vis_05_sankey.png", scale=2)\
+```\
+\
+---\
+\
+### Plot 6: Faceted Bar Chart \'97 Frame Frequency by Party\
+\
+**File:** `vis_06_faceted_frames.png`\
+\
+**What it shows:** One subplot per party (2\'d73 grid). Within each subplot, horizontal bars for each frame colored by FRAME_COLOR. Allows direct within-party and cross-party comparison.\
+\
+**Inputs:** `speeches_df` \'97 group by `party`, `primary_frame`, count speeches.\
+\
+**Libraries:** `matplotlib`, `seaborn`, `pandas`\
+\
+**Implementation instructions:**\
+```\
+1. Figure size: (16, 10). 2 rows \'d7 3 columns of subplots.\
+   Use plt.subplots(2, 3, figsize=(16,10)).\
+   tight_layout with hspace=0.45, wspace=0.35.\
+\
+2. Parties to plot: Liberal, Conservative, NDP, Bloc Qu\'e9b\'e9cois, Green. \
+   5 subplots; leave 6th subplot empty or use for legend.\
+\
+3. For each party subplot:\
+   - Horizontal bar chart (ax.barh()). Frames on Y-axis sorted by count descending.\
+   - Bar color: FRAME_COLOR[frame]. Bar height: 0.6.\
+   - Edge: darker version of bar color. Linewidth: 0.8.\
+   - Annotate count at end of each bar: fontsize=8.5, color='white'.\
+   - Subplot title: party name in PARTY_COLOR[party], fontsize=12, fontweight='bold'.\
+   - Add thin colored top border line in party color (ax.spines['top'] visible, \
+     colored, linewidth=3).\
+   - Remove y-axis label. Remove x-axis spines except bottom.\
+   - X-axis label: "Speech Count" only on bottom-row subplots.\
+\
+4. Shared y-axis frame labels (same order in all subplots for comparability).\
+\
+5. 6th subplot: use for a unified legend showing frame colors with frame names.\
+   Turn axis off. Draw colored patches manually with labels.\
+\
+6. Supertitle: "Argument Frame Distribution by Party"\
+   Subtitle: "Count of CCUS speech segments per frame, by party"\
+```\
+\
+---\
+\
+### Plot 7: Co-occurrence Heatmap \'97 Frame \'d7 Frame\
+\
+**File:** `vis_07_cooccurrence.png`\
+\
+**What it shows:** Symmetric 5\'d75 matrix. Cell color intensity = how often two frames appear together in the same speech. Diagonal = total single-frame usage. Reveals which frames cluster.\
+\
+**Inputs:** `speeches_df` \'97 for each speech with `frames` (list), compute pairwise co-occurrence counts into a 5\'d75 matrix.\
+\
+**Libraries:** `seaborn`, `matplotlib`, `numpy`, `itertools`\
+\
+**Implementation instructions:**\
+```\
+1. Build co-occurrence matrix:\
+   import itertools\
+   matrix = np.zeros((5,5))\
+   for _, row in speeches_df.iterrows():\
+       for f1, f2 in itertools.combinations(row['frames'], 2):\
+           i, j = frame_index[f1], frame_index[f2]\
+           matrix[i][j] += 1\
+           matrix[j][i] += 1\
+       # diagonal: single-frame count\
+       for f in row['frames']:\
+           matrix[frame_index[f]][frame_index[f]] += 1\
+\
+2. Figure size: (9, 8). Dark background.\
+\
+3. seaborn.heatmap():\
+   - cmap: custom colormap from #1A1A2E \uc0\u8594  #7B5EA7 \u8594  #F7C59F \
+     (dark \uc0\u8594  purple \u8594  warm gold; visually distinct from other heatmaps in the set)\
+   - annot=True, fmt='d', annot_kws fontsize=12, color='white'\
+   - square=True (equal aspect ratio)\
+   - linewidths=1.5, linecolor='#0F0F1A'\
+   - xticklabels and yticklabels = frame names\
+   - Rotate x labels 30\'b0, ha='right'\
+\
+4. Mask upper triangle using np.triu(np.ones_like(matrix), k=1).astype(bool) \
+   so only lower triangle + diagonal shown (avoids redundancy).\
+\
+5. Color each axis tick label with FRAME_COLOR[frame].\
+\
+6. Colorbar label: "Co-occurrence Count"\
+\
+7. Add annotation below the chart: \
+   "Diagonal = total usage frequency. Off-diagonal = co-occurrence frequency."\
+   fontsize=9, color='#AAAACC', style='italic'\
+\
+8. Title: "Argument Frame Co-occurrence in CCUS Legislative Debates"\
+   Subtitle: "How frequently frames appear together in the same speech segment"\
+```\
+\
+---\
+\
+### Plot 8: Temporal Line Chart \'97 Stance Trends Over Parliamentary Lifecycle\
+\
+**File:** `vis_08_temporal.png`\
+\
+**What it shows:** X-axis = time (weekly or by bill reading stage). Three lines: Pro, Anti, Conditional speech counts. Vertical marker lines at key legislative events (first reading, royal assent, etc.). Rolling 4-week average smoothing.\
+\
+**Inputs:** `speeches_df` \'97 group by `date` (week) and `stance`, count.\
+\
+**Libraries:** `matplotlib`, `pandas`\
+\
+**Implementation instructions:**\
+```\
+1. Figure size: (14, 6). Dark background.\
+\
+2. Resample speeches_df by week: \
+   weekly = speeches_df.groupby([pd.Grouper(key='date', freq='W'), 'stance'])\
+            ['speech_count'].sum().unstack(fill_value=0)\
+\
+3. Apply 4-week rolling mean: weekly_smooth = weekly.rolling(4, min_periods=1).mean()\
+\
+4. Plot each stance as filled line:\
+   ax.plot(dates, values, color=STANCE_COLOR[stance], lw=2.5, label=stance, zorder=3)\
+   ax.fill_between(dates, 0, values, color=STANCE_COLOR[stance], alpha=0.15, zorder=2)\
+\
+5. Key event markers (vertical lines + annotation):\
+   Define events dict: \{'Bill C-59 First Reading': date1, 'Budget 2022 CCUS ITC Announced': date2,\
+   'Bill C-59 Royal Assent': date3, 'Bill C-262 Introduced': date4\}\
+   For each event:\
+     ax.axvline(x=event_date, color='white', lw=1, alpha=0.5, linestyle='--', zorder=4)\
+     ax.annotate(event_label, xy=(event_date, ax.get_ylim()[1]*0.92),\
+                 xytext=(5, 0), textcoords='offset points',\
+                 fontsize=8, color='#CCCCDD', rotation=90, va='top')\
+\
+6. X-axis: date labels, monthly granularity, rotation=30.\
+   Y-axis: "Speech Count (4-week rolling avg)"\
+\
+7. Legend at upper right with stance line swatches.\
+\
+8. Title: "Temporal Distribution of CCUS Legislative Discourse"\
+   Subtitle: "Rolling 4-week average speech counts by expressed stance"\
+\
+9. Shade background regions lightly to indicate parliamentary sessions:\
+   ax.axvspan(session_start, session_end, alpha=0.04, color='white')\
+```\
+\
+---\
+\
+### Plot 9: Word Clouds by Frame Category\
+\
+**File:** `vis_09_wordclouds.png`\
+\
+**What it shows:** 5 word clouds in a 1\'d75 grid (or 2\'d73 with one empty), one per argument frame. Word size = TF-IDF weight. Background dark, word colors vary within each cloud using a frame-specific palette.\
+\
+**Inputs:** `speeches_df` \'97 for each primary_frame, concatenate all `text_excerpt` strings.\
+\
+**Libraries:** `wordcloud`, `matplotlib`, `sklearn.feature_extraction.text.TfidfVectorizer`\
+\
+**Implementation instructions:**\
+```\
+1. Compute TF-IDF weights:\
+   from sklearn.feature_extraction.text import TfidfVectorizer\
+   For each frame, build corpus of text excerpts.\
+   Fit TfidfVectorizer(max_features=80, stop_words='english') on that frame's corpus.\
+   Extract \{word: tfidf_score\} dict for input to WordCloud.\
+\
+2. Figure: plt.subplots(2, 3, figsize=(18, 8)). Hide 6th axis.\
+   Tight layout: hspace=0.3, wspace=0.1.\
+\
+3. For each frame subplot:\
+   - Custom colormap per frame:\
+       Economic:      shades from #F7C59F to #F4A261\
+       Environmental: shades from #6EE7B7 to #059669\
+       Technological: shades from #93C5FD to #3B82F6\
+       Regional:      shades from #C4B5FD to #7C3AED\
+       Social/Justice: shades from #FCA5A5 to #EF4444\
+   - WordCloud(background_color='#1A1A2E', \
+               color_func=lambda *args, **kwargs: frame_color_func(frame, *args, **kwargs),\
+               max_words=60, width=600, height=350,\
+               prefer_horizontal=0.85,\
+               collocations=False)\
+     .generate_from_frequencies(tfidf_dict)\
+   - ax.imshow(wc, interpolation='bilinear')\
+   - ax.axis('off')\
+\
+4. Subplot title: frame name in FRAME_COLOR[frame], fontsize=13, fontweight='bold'\
+   Position title at bottom of each subplot (loc='bottom') for a caption-like feel.\
+\
+5. Add thin colored border around each subplot panel in FRAME_COLOR[frame].\
+   Use [ax.spines[side].set_visible(True) and set_color(frame_color) for side in all sides]\
+   spines linewidth=2.\
+\
+6. Supertitle: "Key Vocabulary by Argument Frame"\
+   Subtitle: "Word size proportional to TF-IDF weight within frame"\
+```\
+\
+---\
+\
+### Plot 10: Dot Strip Plot \'97 MP Ideological Position on CCUS\
+\
+**File:** `vis_10_ideological_positions.png`\
+\
+**What it shows:** Each MP is a dot on a horizontal ideological axis specific to CCUS. Score computed via a simple pro-anti ratio or Wordfish if applicable. Dots colored by party; vertical jitter prevents overlap. Party mean shown as a larger diamond. Interesting outliers (MPs diverging from their party cluster) annotated by name.\
+\
+**Inputs:** `speeches_df` \'97 compute per-MP position score = (pro_count - anti_count) / total_count. Scale to [-1, +1].\
+\
+**Libraries:** `matplotlib`, `numpy`, `pandas`\
+\
+**Implementation instructions:**\
+```\
+1. Compute MP position scores:\
+   score = (pro_count - anti_count) / total_count\
+   Ranges from -1 (fully anti) to +1 (fully pro).\
+\
+2. Figure size: (14, 7). Dark background.\
+   Single axes with expanded y-range to accommodate jitter.\
+\
+3. For each MP dot:\
+   - x = position_score\
+   - y = party_y_band[party] + np.random.uniform(-0.3, 0.3)  \
+     (assign each party a base y value: CPC=5, Liberal=4, NDP=3, Bloc=2, Green=1, Ind=0)\
+   - Marker: 'o', size proportional to total speech count (min=40, max=200 for scatter s=)\
+   - color = PARTY_COLOR[party], edgecolor='white', linewidth=0.8, alpha=0.85, zorder=3\
+\
+4. Party mean diamond:\
+   Compute mean score per party. Plot as diamond ('D') marker:\
+   size=250, color=PARTY_COLOR[party], edgecolor='white', linewidth=2, zorder=5.\
+   Annotate with party abbreviation above diamond.\
+\
+5. Y-axis: replace numeric ticks with party name labels centered on each party band.\
+   Color each label with PARTY_COLOR[party], fontsize=12, fontweight='bold'.\
+\
+6. X-axis:\
+   - Range: [-1.1, 1.1]\
+   - Label: "\uc0\u8592  Opposes CCUS Legislation     CCUS Position Score     Supports CCUS \u8594 "\
+   - Add vertical reference line at x=0: color='white', lw=1.5, alpha=0.5\
+   - Add subtle gradient shading: left half #FF6B6B alpha=0.04, right half #3EC9A7 alpha=0.04\
+\
+7. Annotate outlier MPs (score diverges from party mean by > 0.3):\
+   ax.annotate(mp_name, xy=(score, y), xytext=(8, 5), textcoords='offset points',\
+               fontsize=8, color='white', \
+               arrowprops=dict(arrowstyle='->', color='white', lw=0.8))\
+\
+8. Add size legend showing dot size = speech count (small/medium/large reference dots).\
+   Place at lower right corner.\
+\
+9. Title: "MP-Level Ideological Positioning on Federal CCUS Legislation"\
+   Subtitle: "Score = (Pro \uc0\u8722  Anti) / Total speeches. Dot size = total speech volume."\
+```\
+\
+---\
+\
+### Final Output Script Structure\
+\
+Tell Claude Code to organize everything as:\
+\
+```python\
+# master_vis.py\
+# 1. Install dependencies\
+# 2. Define DESIGN_SYSTEM dict with all colors\
+# 3. Define generate_mock_data() \uc0\u8594  returns speeches_df, party_df, frame_df\
+# 4. Define apply_dark_theme(ax) helper that applies global style to any axes\
+# 5. Define plot_01() through plot_10(), each saving to /mnt/user-data/outputs/\
+# 6. Call all 10 in sequence under if __name__ == '__main__'\
+# 7. Print confirmation with file path after each successful save\
+```\
+\
+Each plot function should accept the relevant DataFrame(s) as arguments so they can be swapped for real data without touching the plotting logic.}
