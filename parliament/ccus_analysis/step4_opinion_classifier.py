@@ -115,25 +115,45 @@ class LLMOpinionClassifier:
             confidence=data.get("confidence", "low"),
         )
 
-    # Maximum characters of combined speech text to send to the LLM.
-    # Keeps prompts reasonable for local models and avoids context-window errors.
+    # Maximum characters of combined passage text sent to the LLM per actor.
+    # When speeches have been pre-filtered to CCUS-relevant passages by
+    # CCUSPassageExtractor the budget is used much more efficiently — the
+    # same 12 000 chars now covers only on-topic content rather than entire
+    # speeches that may be largely about unrelated topics.
     MAX_COMBINED_CHARS = 12_000
 
     def _combine_speeches(self, speeches: list[dict]) -> str:
+        """
+        Build the text block sent to the LLM for a single actor.
+
+        If speeches carry ``ccus_passages`` (pre-extracted relevant paragraphs
+        from CCUSPassageExtractor), those are used directly.  This means the
+        context window contains only the portions of each speech that were
+        identified as CCUS-relevant, rather than the full speech text.
+
+        Falls back gracefully to the full ``content_text`` for unannotated
+        speeches so the classifier remains usable without the extraction step.
+        """
         parts = []
         total = 0
         for speech in speeches:
-            # Prefer already-stripped text; fall back to stripping HTML
-            content_text = speech.get("content_text", {})
-            if isinstance(content_text, dict):
-                text = content_text.get("en") or content_text.get("fr") or ""
+            ccus_passages = speech.get("ccus_passages")
+            if ccus_passages:
+                # Use only the pre-extracted CCUS-relevant paragraph windows.
+                text = "\n\n".join(ccus_passages).strip()
             else:
-                content = speech.get("content", {})
-                if isinstance(content, dict):
-                    text = strip_html(content.get("en") or content.get("fr") or "")
+                # Fallback: full stripped content.
+                content_text = speech.get("content_text", {})
+                if isinstance(content_text, dict):
+                    text = content_text.get("en") or content_text.get("fr") or ""
                 else:
-                    text = ""
-            text = text.strip()
+                    content = speech.get("content", {})
+                    if isinstance(content, dict):
+                        text = strip_html(content.get("en") or content.get("fr") or "")
+                    else:
+                        text = ""
+                text = text.strip()
+
             if not text:
                 continue
             remaining = self.MAX_COMBINED_CHARS - total
@@ -142,7 +162,7 @@ class LLMOpinionClassifier:
             chunk = text[:remaining]
             parts.append(chunk)
             total += len(chunk)
-        return "\n\n".join(parts)
+        return "\n\n---\n\n".join(parts)
 
 
 # Backward compatibility
