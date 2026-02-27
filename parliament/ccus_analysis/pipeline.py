@@ -1,13 +1,14 @@
 from datetime import datetime, timezone
 
-from .actor_extractor import ActorExtractor
-from .api_client import OpenParliamentClient
-from .bill_finder import CCUSBillFinder
-from .hansard_fetcher import HansardFetcher
+from .config import API_BASE_URL
+from .step1_bill_finder import CCUSBillFinder
+from .step2_hansard_fetcher import HansardFetcher
+from .step3_actor_extractor import ActorExtractor
+from .step4_opinion_classifier import LLMOpinionClassifier, OpinionClassifier
 from .keywords import KeywordProvider, StaticCCUSKeywordProvider
 from .manual_bills import get_manual_bill_entries, parse_bill_entry
 from .models import BillAnalysis, CCUSAnalysisResult
-from .opinion_classifier import LLMOpinionClassifier, OpinionClassifier
+from .api_client import OpenParliamentClient
 
 
 class CCUSAnalysisPipeline:
@@ -180,7 +181,7 @@ class CCUSAnalysisPipeline:
     # ------------------------------------------------------------------
 
     @classmethod
-    def create_default(cls, base_url: str = "http://localhost:8000") -> "CCUSAnalysisPipeline":
+    def create_default(cls, base_url: str = API_BASE_URL) -> "CCUSAnalysisPipeline":
         client = OpenParliamentClient(base_url=base_url)
         keyword_provider = StaticCCUSKeywordProvider()
         # search_full_text=False: the per-bill detail fetch is only used for
