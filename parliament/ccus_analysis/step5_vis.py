@@ -36,9 +36,10 @@ from .config import VIS_DIR, JSON_DIR
 # ─────────────────────────────────────────────────────────────────────────────
 
 BASE_DPI = 150
-BG       = "#0F0F1A"
-PANEL_BG = "#1A1A2E"
-GRID     = "#2A2A45"
+# Light theme backgrounds and grid
+BG       = "#FFFFFF"
+PANEL_BG = "#F3F4F6"
+GRID     = "#D1D5DB"
 
 PARTY_COLORS = {
     "Liberal":        "#E8333C",
@@ -66,14 +67,22 @@ STANCE_COLORS = {
 }
 
 FRAME_COLORS = {
-    "Economic":       "#F7C59F",
-    "Environmental":  "#6EE7B7",
-    "Technological":  "#93C5FD",
-    "Regional":       "#C4B5FD",
-    "Social/Justice": "#FCA5A5",
+    "Economic":      "#F7C59F",
+    "Environmental": "#6EE7B7",
+    "Political":     "#C4B5FD",
+    "Scientific":    "#93C5FD",
+    "Innovation":    "#FCA5A5",
+}
+# Solid, saturated bar colors for faceted frame plot (same hues, higher purity/visibility)
+FRAME_COLORS_SOLID = {
+    "Economic":      "#E07B39",
+    "Environmental": "#059669",
+    "Political":     "#7C3AED",
+    "Scientific":    "#2563EB",
+    "Innovation":    "#DC2626",
 }
 
-FRAMES   = ["Economic", "Environmental", "Technological", "Regional", "Social/Justice"]
+FRAMES   = ["Economic", "Environmental", "Political", "Scientific", "Innovation"]
 PARTIES  = ["Liberal", "Conservative", "NDP", "Bloc Québécois", "Green"]
 
 # Visualization output directory: <ccus_analysis>/output/vis
@@ -100,10 +109,11 @@ def _apply_dark_theme(ax):
     ax.spines["left"].set_visible(True)
     ax.spines["bottom"].set_color(GRID)
     ax.spines["left"].set_color(GRID)
-    ax.tick_params(colors="#AAAACC", labelsize=9)
-    ax.xaxis.label.set_color("#CCCCDD")
+    # Dark text on light background
+    ax.tick_params(colors="#374151", labelsize=9)
+    ax.xaxis.label.set_color("#111827")
     ax.xaxis.label.set_fontsize(11)
-    ax.yaxis.label.set_color("#CCCCDD")
+    ax.yaxis.label.set_color("#111827")
     ax.yaxis.label.set_fontsize(11)
 
 
@@ -126,9 +136,9 @@ def _save_legend_fig(handles, title: str, slug: str) -> None:
     leg = ax_leg.legend(
         handles=handles, loc="center",
         framealpha=0.3, facecolor=PANEL_BG, edgecolor=GRID,
-        labelcolor="#CCCCDD", title=title, title_fontsize=10, fontsize=9,
+        labelcolor="#374151", title=title, title_fontsize=10, fontsize=9,
     )
-    leg.get_title().set_color("#CCCCDD")
+    leg.get_title().set_color("#111827")
     png = OUTPUT_DIR / f"{slug}.png"
     svg = OUTPUT_DIR / f"{slug}.svg"
     fig_leg.savefig(png, dpi=BASE_DPI, bbox_inches="tight", facecolor=BG)
@@ -310,6 +320,30 @@ def generate_mock_data() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
 # LOAD REAL PIPELINE DATA
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _step3_speech_count_lookup(json_path: str) -> dict:
+    """Build (session, bill_num) -> {politician_url: speech_count} from step3_actors.json."""
+    import json
+    path = Path(json_path)
+    step3_path = path.parent / "step3_actors.json"
+    if not step3_path.exists():
+        return {}
+    try:
+        with open(step3_path) as f:
+            step3 = json.load(f)
+    except Exception:
+        return {}
+    lookup = {}
+    for rec in step3 if isinstance(step3, list) else []:
+        bill = rec.get("bill", {})
+        key = (bill.get("session", ""), bill.get("number", ""))
+        lookup[key] = {}
+        for actor in rec.get("actors", []):
+            url = actor.get("politician_url")
+            if url:
+                lookup[key][url] = len(actor.get("speeches", []))
+    return lookup
+
+
 def load_pipeline_data(json_path: str) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Convert pipeline JSON output (written by JSONOutputWriter) into the
@@ -333,6 +367,8 @@ def load_pipeline_data(json_path: str) -> tuple[pd.DataFrame, pd.DataFrame, pd.D
     # Accept both {"bills": [...]} (CCUSAnalysisResult) and a bare list (step4 output).
     bill_records = data if isinstance(data, list) else data.get("bills", [])
 
+    step3_lookup = _step3_speech_count_lookup(json_path)
+
     rows = []
     for bill_rec in bill_records:
         bill      = bill_rec.get("bill", {})
@@ -345,21 +381,40 @@ def load_pipeline_data(json_path: str) -> tuple[pd.DataFrame, pd.DataFrame, pd.D
             actor      = opinion.get("actor", {})
             mp_name    = actor.get("name", "Unknown")
             party      = actor.get("party") or "Independent"
+            # Normalize API short names to match PARTIES (e.g. "Bloc" -> "Bloc Québécois")
+            if party == "Bloc":
+                party = "Bloc Québécois"
             raw_stance = opinion.get("stance", "neutral")
             stance     = STANCE_MAP.get(raw_stance, "Neutral")
 
             arguments  = opinion.get("arguments", [])
             frames     = list({a.get("type", "economic").capitalize() for a in arguments})
-            frame_map  = {"Economic": "Economic", "Environmental": "Environmental",
-                          "Technical": "Technological", "Technological": "Technological",
-                          "Jurisdictional": "Regional", "Social": "Social/Justice",
-                          "Ethical": "Social/Justice"}
+            frame_map  = {
+                # New step-4 categories
+                "Economic":      "Economic",
+                "Environmental": "Environmental",
+                "Political":     "Political",
+                "Scientific":    "Scientific",
+                "Innovation":    "Innovation",
+                # Legacy categories mapped into the new frame set
+                "Technical":       "Scientific",
+                "Technological":   "Scientific",
+                "Jurisdictional":  "Political",
+                "Social":          "Political",
+                "Ethical":         "Political",
+            }
             frames     = [frame_map.get(f, "Economic") for f in frames]
             if not frames:
                 frames = ["Economic"]
             primary    = frames[0]
 
-            speech_count = len(actor.get("speeches", []))
+            sc = opinion.get("speech_count")
+            if sc is not None:
+                speech_count = int(sc)
+            else:
+                by_actor = step3_lookup.get((session, bill_num), {})
+                speech_count = by_actor.get(actor.get("politician_url")) or len(actor.get("speeches", [])) or 0
+                speech_count = int(speech_count)
 
             rows.append({
                 "mp_name":       mp_name,
@@ -389,17 +444,19 @@ def load_pipeline_data(json_path: str) -> tuple[pd.DataFrame, pd.DataFrame, pd.D
     denom = agg["party"].map(totals)
     agg["proportion"] = np.where(denom != 0, agg["count"] / denom, np.nan)
 
-    # frame_df
+    # frame_df (diagonal = speech count by primary frame; off-diagonal = co-occurrence)
     fi  = {f: i for i, f in enumerate(FRAMES)}
     mat = np.zeros((len(FRAMES), len(FRAMES)))
     for _, row in speeches_df.iterrows():
         fs = [f for f in row["frames"] if f in fi]
+        sc = row["speech_count"]
+        prim = row.get("primary_frame")
+        if prim and prim in fi:
+            mat[fi[prim]][fi[prim]] += sc
         for f1, f2 in itertools.combinations(fs, 2):
             i, j = fi[f1], fi[f2]
-            mat[i][j] += row["speech_count"]
-            mat[j][i] += row["speech_count"]
-        for f in fs:
-            mat[fi[f]][fi[f]] += row["speech_count"]
+            mat[i][j] += sc
+            mat[j][i] += sc
 
     return speeches_df, agg, pd.DataFrame(mat, index=FRAMES, columns=FRAMES)
 
@@ -490,7 +547,7 @@ def plot_01_mp_lollipop(speeches_df: pd.DataFrame) -> None:
         )
 
     ax.set_xlim(-mx * 1.5, mx * 1.35)
-    ax.axvline(0, color="white", lw=1.5, alpha=0.4, zorder=2)
+    ax.axvline(0, color="#9CA3AF", lw=1.5, alpha=0.7, zorder=2)
 
     # Bold, prominent directional label under the plot.
     ax.set_xlabel(
@@ -500,7 +557,7 @@ def plot_01_mp_lollipop(speeches_df: pd.DataFrame) -> None:
 
     ax.set_title(
         "Parliamentary Engagement with Federal CCUS Legislation\nby MP and Stance",
-        color="white", fontsize=14, fontweight="bold",
+        color="#111827", fontsize=14, fontweight="bold",
     )
 
     # Save party legend as a standalone figure.
@@ -522,7 +579,7 @@ def plot_01_mp_lollipop(speeches_df: pd.DataFrame) -> None:
 def plot_02_party_stance(party_df: pd.DataFrame) -> None:
     pivot = party_df.pivot_table(index="party", columns="stance",
                                  values="proportion", fill_value=0)
-    for col in ["Pro-CCUS", "Conditional", "Anti-CCUS"]:
+    for col in ["Pro-CCUS", "Conditional", "Anti-CCUS", "Neutral"]:
         if col not in pivot.columns:
             pivot[col] = 0
     totals = party_df.groupby("party")["count"].sum()
@@ -531,43 +588,45 @@ def plot_02_party_stance(party_df: pd.DataFrame) -> None:
     fig = _make_fig((11, 6))
     ax  = fig.add_subplot(111)
     _apply_dark_theme(ax)
+    ax.grid(False)
 
     left = np.zeros(len(pivot))
-    for stance, color in [("Pro-CCUS", STANCE_COLORS["Pro-CCUS"]),
+    for stance, color in [("Pro-CCUS",   STANCE_COLORS["Pro-CCUS"]),
                            ("Conditional", STANCE_COLORS["Conditional"]),
-                           ("Anti-CCUS",  STANCE_COLORS["Anti-CCUS"])]:
+                           ("Anti-CCUS",  STANCE_COLORS["Anti-CCUS"]),
+                           ("Neutral",    STANCE_COLORS["Neutral"])]:
         vals = pivot[stance].values
         ax.barh(range(len(pivot)), vals, left=left, color=color, height=0.55,
                 edgecolor=BG, linewidth=0.8)
         for j, (v, l) in enumerate(zip(vals, left)):
             if v > 0.07:
                 ax.text(l + v / 2, j, f"{v:.0%}", va="center", ha="center",
-                        color="#0F0F1A", fontsize=9, fontweight="bold")
+                        color="#111827", fontsize=9, fontweight="bold")
         left += vals
 
     for j, party in enumerate(pivot.index):
         n = int(totals.get(party, 0))
-        ax.text(1.02, j, f"n={n}", va="center", color="#CCCCDD", fontsize=9)
+        ax.text(1.02, j, f"n={n}", va="center", color="#374151", fontsize=9)
 
     ax.set_yticks(range(len(pivot)))
     ax.set_yticklabels(pivot.index)
     for tick, party in zip(ax.get_yticklabels(), pivot.index):
         tick.set_color(PARTY_COLORS.get(party, "#A0A0B0"))
 
-    ax.set_xlim(0, 1.13)
-    ax.axvline(0.5, color="white", lw=1, alpha=0.3, linestyle=":")
+    ax.set_xlim(0, 1.15)
+    ax.axvline(0.5, color="#9CA3AF", lw=1, alpha=0.7, linestyle=":")
     ax.set_xlabel("Proportion of CCUS Speech Segments")
     ax.xaxis.set_major_formatter(mticker.PercentFormatter(1.0))
 
     patches = [mpatches.Patch(color=STANCE_COLORS[s], label=s)
-               for s in ["Pro-CCUS", "Conditional", "Anti-CCUS"]]
-    ax.legend(handles=patches, loc="lower right", framealpha=0.2, facecolor=PANEL_BG,
-              edgecolor=GRID, labelcolor="#CCCCDD", ncol=3)
+               for s in ["Pro-CCUS", "Conditional", "Anti-CCUS", "Neutral"]]
+    ax.legend(handles=patches, loc="upper center", bbox_to_anchor=(0.5, -0.26),
+              framealpha=0.2, facecolor=PANEL_BG, edgecolor=GRID, labelcolor="#374151", ncol=4)
 
     ax.set_title("Party-Level Positioning on Federal CCUS Legislation",
-                 color="white", fontsize=14, fontweight="bold")
-    ax.text(0.5, -0.13, "Proportion of speech segments by expressed stance",
-            transform=ax.transAxes, ha="center", color="#AAAACC", fontsize=9)
+                 color="#111827", fontsize=14, fontweight="bold")
+    # ax.text(0.5, -0.13, "Proportion of speech segments by expressed stance",
+    #         transform=ax.transAxes, ha="center", color="#4B5563", fontsize=9)
     _save_fig(fig, "vis_02_party_stance")
 
 
@@ -625,7 +684,7 @@ def plot_03_mp_bill_heatmap(speeches_df: pd.DataFrame) -> None:
 
     cbar = ax_main.collections[0].colorbar
     cbar.ax.yaxis.label.set_color("#CCCCDD")
-    cbar.ax.tick_params(colors="#AAAACC")
+    cbar.ax.tick_params(colors="#374151")
 
     # Party sidebar
     ax_bar.set_facecolor(BG)
@@ -637,10 +696,10 @@ def plot_03_mp_bill_heatmap(speeches_df: pd.DataFrame) -> None:
         ax_bar.add_patch(mpatches.Rectangle((0, i), 1, 1,
                          color=PARTY_COLORS.get(party, "#A0A0B0"), ec="none"))
         if party != prev and i > 0:
-            ax_bar.axhline(i, color="#0F0F1A", lw=1.5, alpha=0.5)
+            ax_bar.axhline(i, color="#9CA3AF", lw=1.0, alpha=0.8)
             mid = (block_start + i) / 2
             ax_bar.text(0.5, mid, PARTY_ABBREV.get(prev, "?"),
-                        ha="center", va="center", fontsize=7, color="white",
+                        ha="center", va="center", fontsize=7, color="#111827",
                         fontweight="bold", rotation=90)
             block_start = i
         prev = party
@@ -650,16 +709,16 @@ def plot_03_mp_bill_heatmap(speeches_df: pd.DataFrame) -> None:
                 fontweight="bold", rotation=90)
 
     ax_main.set_title("CCUS Legislative Engagement by MP and Bill/Venue",
-                      color="white", fontsize=14, fontweight="bold", pad=30)
+                      color="#111827", fontsize=14, fontweight="bold", pad=30)
     fig.patch.set_facecolor(BG)
     _save_fig(fig, "vis_03_mp_bill_heatmap")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PLOT 04 — Radar / Spider: Frame Prevalence by Stance
+# PLOT 03 — Radar / Spider: Frame Prevalence by Stance
 # ─────────────────────────────────────────────────────────────────────────────
 
-def plot_04_radar_frames(speeches_df: pd.DataFrame) -> None:
+def plot_03_radar_frames(speeches_df: pd.DataFrame) -> None:
     n      = len(FRAMES)
     angles = np.linspace(0, 2 * np.pi, n, endpoint=False)
 
@@ -671,7 +730,13 @@ def plot_04_radar_frames(speeches_df: pd.DataFrame) -> None:
     for stance, color in [("Pro-CCUS", STANCE_COLORS["Pro-CCUS"]),
                            ("Anti-CCUS", STANCE_COLORS["Anti-CCUS"])]:
         sub    = speeches_df[speeches_df["stance"] == stance]
-        counts = [sub[sub["primary_frame"] == f]["speech_count"].sum() for f in FRAMES]
+        # Count speech_count for each frame across ALL frames listed per row
+        counts = []
+        for f in FRAMES:
+            c = sub[sub["frames"].apply(
+                lambda fs: isinstance(fs, list) and f in fs
+            )]["speech_count"].sum()
+            counts.append(c)
         mx     = max(counts) or 1
         vals   = [c / mx for c in counts]
         closed = np.append(vals, vals[0])
@@ -684,11 +749,11 @@ def plot_04_radar_frames(speeches_df: pd.DataFrame) -> None:
     for angle, frame in zip(angles, FRAMES):
         ax.plot([angle, angle], [0, 1.0], color=GRID, lw=1, zorder=0)
         ha = "left" if np.cos(angle) > 0.1 else ("right" if np.cos(angle) < -0.1 else "center")
-        ax.text(angle, 1.22, frame, ha=ha, va="center", color="#CCCCDD", fontsize=11)
+        ax.text(angle, 1.22, frame, ha=ha, va="center", color="#374151", fontsize=11)
 
     for r in [0.25, 0.50, 0.75, 1.00]:
         ax.plot(np.append(angles, angles[0]), [r] * (n + 1), color=GRID, lw=0.5, ls="--")
-    ax.text(angles[0], 0.56, "50%", ha="center", va="center", color="#AAAACC", fontsize=8)
+    ax.text(angles[0], 0.56, "50%", ha="center", va="center", color="#6B7280", fontsize=8)
 
     ax.set_xticks([])
     ax.set_yticks([])
@@ -696,24 +761,24 @@ def plot_04_radar_frames(speeches_df: pd.DataFrame) -> None:
     ax.spines["polar"].set_color(GRID)
 
     ax.legend(loc="lower center", bbox_to_anchor=(0.5, -0.12), framealpha=0.2,
-              facecolor=PANEL_BG, edgecolor=GRID, labelcolor="#CCCCDD", ncol=2, fontsize=10)
+              facecolor=PANEL_BG, edgecolor=GRID, labelcolor="#374151", ncol=2, fontsize=10)
     ax.set_title("Argument Frame Composition\nPro-CCUS vs. Anti-CCUS Legislative Discourse",
-                 color="white", fontsize=14, fontweight="bold", pad=35)
+                 color="#111827", fontsize=14, fontweight="bold", pad=35)
     fig.text(0.5, 0.02, "Normalized prevalence across speech segments",
-             ha="center", color="#AAAACC", fontsize=9)
-    _save_fig(fig, "vis_04_radar_frames")
+             ha="center", color="#4B5563", fontsize=9)
+    _save_fig(fig, "vis_03_radar_frames")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PLOT 05 — Sankey: Party → Stance → Frame
+# PLOT 04 — Sankey: Party → Stance → Frame
 # ─────────────────────────────────────────────────────────────────────────────
 
-def plot_05_sankey(speeches_df: pd.DataFrame) -> None:
+def plot_04_sankey(speeches_df: pd.DataFrame) -> None:
     try:
         import plotly.graph_objects as go
         import plotly.io as pio
     except ImportError:
-        print("  Skipping Plot 5: plotly not installed (pip install plotly kaleido).")
+        print("  Skipping Plot 4: plotly not installed (pip install plotly kaleido).")
         return
 
     def hex_rgba(hex_color, alpha=0.45):
@@ -721,7 +786,7 @@ def plot_05_sankey(speeches_df: pd.DataFrame) -> None:
         return f"rgba({r},{g},{b},{alpha})"
 
     parties_present = [p for p in PARTIES if p in speeches_df["party"].unique()]
-    stances_present = [s for s in ["Pro-CCUS", "Anti-CCUS", "Conditional"]
+    stances_present = [s for s in ["Pro-CCUS", "Conditional", "Anti-CCUS", "Neutral"]
                        if s in speeches_df["stance"].unique()]
     frames_present  = FRAMES
 
@@ -750,138 +815,170 @@ def plot_05_sankey(speeches_df: pd.DataFrame) -> None:
         [FRAME_COLORS.get(f, "#A0A0B0")  for f in frames_present]
     )
 
+    # Explicit x/y positions so parties are always left, stances centre, frames right.
+    def _spread(n):
+        if n == 1:
+            return [0.5]
+        return [0.05 + 0.90 * i / (n - 1) for i in range(n)]
+
+    node_x = [0.02] * len(parties_present) + [0.50] * len(stances_present) + [0.98] * len(frames_present)
+    node_y = _spread(len(parties_present)) + _spread(len(stances_present)) + _spread(len(frames_present))
+
     fig = go.Figure(go.Sankey(
-        node=dict(pad=15, thickness=20, label=all_nodes, color=node_colors,
-                  line=dict(color="#0F0F1A", width=0.5)),
+        node=dict(
+            pad=20, thickness=22,
+            label=all_nodes, color=node_colors,
+            x=node_x, y=node_y,
+            line=dict(color=GRID, width=0.5),
+        ),
         link=dict(source=sources, target=targets, value=values, color=link_colors),
     ))
     fig.update_layout(
         title_text="Flow of CCUS Legislative Discourse: Party → Position → Argument Frame",
-        title_font=dict(color="#FFFFFF", size=16),
-        paper_bgcolor="#0F0F1A", plot_bgcolor="#0F0F1A",
-        font=dict(color="#CCCCDD", size=12, family="Inter"),
+        title_font=dict(color="#111827", size=16),
+        paper_bgcolor=BG, plot_bgcolor=PANEL_BG,
+        font=dict(color="#374151", size=12, family="Inter"),
         width=1400, height=800,
         margin=dict(l=120, r=120, t=80, b=40),
         annotations=[
-            dict(x=0.05, y=1.05, text="Party",          showarrow=False,
-                 font=dict(color="white", size=13), xref="paper", yref="paper"),
+            dict(x=0.02, y=1.05, text="Party",          showarrow=False,
+                 font=dict(color="#111827", size=13), xref="paper", yref="paper"),
             dict(x=0.50, y=1.05, text="Stance",         showarrow=False,
-                 font=dict(color="white", size=13), xref="paper", yref="paper"),
-            dict(x=0.95, y=1.05, text="Dominant Frame", showarrow=False,
-                 font=dict(color="white", size=13), xref="paper", yref="paper"),
+                 font=dict(color="#111827", size=13), xref="paper", yref="paper"),
+            dict(x=0.98, y=1.05, text="Argument Frame", showarrow=False,
+                 font=dict(color="#111827", size=13), xref="paper", yref="paper"),
         ],
     )
 
-    png = str(OUTPUT_DIR / "vis_05_sankey.png")
-    svg = str(OUTPUT_DIR / "vis_05_sankey.svg")
+    png = str(OUTPUT_DIR / "vis_04_sankey.png")
+    svg = str(OUTPUT_DIR / "vis_04_sankey.svg")
     try:
         fig.write_image(png, scale=2)
         fig.write_image(svg)
         print(f"  Saved {png}")
         print(f"  Saved {svg}")
     except Exception as e:
-        html = str(OUTPUT_DIR / "vis_05_sankey.html")
+        html = str(OUTPUT_DIR / "vis_04_sankey.html")
         fig.write_html(html)
         print(f"  Warning: image export failed ({e}). Saved HTML → {html}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PLOT 06 — Faceted Bar: Frame Frequency by Party
+# PLOT 05 — Faceted Bar: Frame Frequency by Party
 # ─────────────────────────────────────────────────────────────────────────────
 
-def plot_06_faceted_frames(speeches_df: pd.DataFrame) -> None:
+def plot_05_faceted_frames(speeches_df: pd.DataFrame) -> None:
     fig, axes = plt.subplots(2, 3, figsize=(16, 10))
     fig.patch.set_facecolor(BG)
-    fig.tight_layout(h_pad=4.5, w_pad=3.5)
+    # Slightly larger vertical spacing so titles/plots/legend breathe.
+    fig.tight_layout(h_pad=5.5, w_pad=3.8)
+
+    # Global x limit so all party panels share the same horizontal scale for comparability
+    x_max_global = 1
+    for _party in PARTIES:
+        _sub = speeches_df[speeches_df["party"] == _party]
+        _counts = _sub.groupby("primary_frame")["speech_count"].sum().reindex(FRAMES, fill_value=0)
+        if len(_counts):
+            x_max_global = max(x_max_global, _counts.max())
+    x_lim = (0, int(x_max_global * 1.05) + 1)
 
     for idx, party in enumerate(PARTIES):
         ax = axes[idx // 3][idx % 3]
         _apply_dark_theme(ax)
+        ax.grid(False)
 
         sub    = speeches_df[speeches_df["party"] == party]
+        # Fixed order across all parties: FRAMES order (Economic, Environmental, Political, Scientific, Innovation)
         counts = (sub.groupby("primary_frame")["speech_count"].sum()
-                  .reindex(FRAMES, fill_value=0)
-                  .sort_values(ascending=True))
-        colors = [FRAME_COLORS[f] for f in counts.index]
+                  .reindex(FRAMES, fill_value=0))
+        colors = [FRAME_COLORS_SOLID[f] for f in counts.index]
 
         bars = ax.barh(range(len(counts)), counts.values, color=colors, height=0.6, linewidth=0)
         for bar, val in zip(bars, counts.values):
             ax.text(bar.get_width() + 0.2, bar.get_y() + bar.get_height() / 2,
-                    str(int(val)), va="center", color="white", fontsize=8.5)
+                    str(int(val)), va="center", color="#111827", fontsize=10)
 
         ax.set_yticks(range(len(counts)))
-        ax.set_yticklabels(counts.index, fontsize=9, color="#AAAACC")
+        ax.set_yticklabels(counts.index, fontsize=11, color="#111827")
         ax.set_title(party, color=PARTY_COLORS.get(party, "#A0A0B0"),
-                     fontsize=12, fontweight="bold")
+                     fontsize=14, fontweight="bold", pad=8)
         ax.spines["top"].set_visible(True)
         ax.spines["top"].set_color(PARTY_COLORS.get(party, "#A0A0B0"))
         ax.spines["top"].set_linewidth(3)
         if idx // 3 == 1:
-            ax.set_xlabel("Speech Count", color="#CCCCDD", fontsize=9)
+            ax.set_xlabel("Speech Count", color="#374151", fontsize=11, labelpad=6)
+        ax.xaxis.set_major_locator(mticker.MaxNLocator(integer=True))
+        ax.set_xlim(x_lim)
 
     # 6th subplot → legend
     ax_leg = axes[1][2]
     ax_leg.set_facecolor(PANEL_BG)
     ax_leg.axis("off")
-    patches = [mpatches.Patch(color=FRAME_COLORS[f], label=f) for f in FRAMES]
-    ax_leg.legend(handles=patches, loc="center", framealpha=0, labelcolor="#CCCCDD",
-                  fontsize=11, title="Argument Frames", title_fontsize=12, labelspacing=1.2)
+    patches = [mpatches.Patch(color=FRAME_COLORS_SOLID[f], label=f) for f in FRAMES]
+    ax_leg.legend(handles=patches, loc="center", framealpha=0, labelcolor="#111827",
+                  fontsize=12, title="Argument Frames", title_fontsize=13, labelspacing=1.4)
 
     fig.suptitle("Argument Frame Distribution by Party",
-                 color="white", fontsize=15, fontweight="bold", y=1.01)
-    fig.text(0.5, 0.985, "Count of CCUS speech segments per frame, by party",
-             ha="center", color="#AAAACC", fontsize=10)
-    _save_fig(fig, "vis_06_faceted_frames")
+                 color="#111827", fontsize=17, fontweight="bold", y=1.03)
+    _save_fig(fig, "vis_05_faceted_frames")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PLOT 07 — Co-occurrence Heatmap: Frame × Frame
+# PLOT 06 — Co-occurrence Heatmap: Frame × Frame
 # ─────────────────────────────────────────────────────────────────────────────
 
-def plot_07_cooccurrence(speeches_df: pd.DataFrame) -> None:
+def plot_06_cooccurrence(speeches_df: pd.DataFrame) -> None:
     fi  = {f: i for i, f in enumerate(FRAMES)}
     mat = np.zeros((len(FRAMES), len(FRAMES)))
 
     for _, row in speeches_df.iterrows():
         fs = [f for f in (row["frames"] if isinstance(row["frames"], list) else [row["frames"]])
               if f in fi]
+        sc = row["speech_count"]
+        # Diagonal: count each speech once by primary frame (so diagonal sum = total speeches)
+        prim = row.get("primary_frame")
+        if prim and prim in fi:
+            mat[fi[prim]][fi[prim]] += sc
+        # Off-diagonal: co-occurrence of frames within the same opinion
         for f1, f2 in itertools.combinations(fs, 2):
             i, j = fi[f1], fi[f2]
-            mat[i][j] += row["speech_count"]
-            mat[j][i] += row["speech_count"]
-        for f in fs:
-            mat[fi[f]][fi[f]] += row["speech_count"]
+            mat[i][j] += sc
+            mat[j][i] += sc
 
     mask = np.triu(np.ones_like(mat, dtype=bool), k=1)
     cmap = mcolors.LinearSegmentedColormap.from_list(
-        "cooc", ["#1A1A2E", "#7B5EA7", "#F7C59F"])
+        "cooc", [PANEL_BG, "#7B5EA7", "#E07B39"])
 
     fig = _make_fig((9, 8))
     ax  = fig.add_subplot(111)
     ax.set_facecolor(PANEL_BG)
+    ax.grid(False)
 
     sns.heatmap(mat, ax=ax, cmap=cmap, mask=mask, annot=True, fmt=".0f",
-                annot_kws={"fontsize": 12, "color": "white"},
-                square=True, linewidths=1.5, linecolor="#0F0F1A",
+                annot_kws={"fontsize": 13, "color": "#111827"},
+                square=True, linewidths=1.5, linecolor=BG,
                 xticklabels=FRAMES, yticklabels=FRAMES,
                 cbar_kws={"label": "Co-occurrence Count", "shrink": 0.8})
 
-    ax.set_xticklabels(ax.get_xticklabels(), rotation=30, ha="right")
+    ax.set_xticklabels(ax.get_xticklabels(), rotation=30, ha="right", fontsize=12, fontweight="bold")
     for tick, frame in zip(ax.get_xticklabels(), FRAMES):
-        tick.set_color(FRAME_COLORS.get(frame, "#AAAACC"))
+        tick.set_color(FRAME_COLORS_SOLID.get(frame, "#111827"))
     for tick, frame in zip(ax.get_yticklabels(), FRAMES):
-        tick.set_color(FRAME_COLORS.get(frame, "#AAAACC"))
+        tick.set_color(FRAME_COLORS_SOLID.get(frame, "#111827"))
+        tick.set_fontsize(12)
+        tick.set_fontweight("bold")
 
     cbar = ax.collections[0].colorbar
-    cbar.ax.yaxis.label.set_color("#CCCCDD")
-    cbar.ax.tick_params(colors="#AAAACC")
+    cbar.ax.yaxis.label.set_color("#374151")
+    cbar.ax.yaxis.label.set_fontsize(12)
+    cbar.ax.tick_params(colors="#374151", labelsize=10)
 
     ax.set_title("Argument Frame Co-occurrence in CCUS Legislative Debates",
-                 color="white", fontsize=14, fontweight="bold")
-    fig.text(0.5, 0.01,
+                 color="#111827", fontsize=16, fontweight="bold", pad=16)
+    fig.text(0.5, 0.012,
              "Diagonal = total usage frequency. Off-diagonal = co-occurrence frequency.",
-             ha="center", color="#AAAACC", fontsize=9, style="italic")
-    _save_fig(fig, "vis_07_cooccurrence")
+             ha="center", color="#4B5563", fontsize=10, style="italic")
+    _save_fig(fig, "vis_06_cooccurrence")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -921,7 +1018,7 @@ def plot_08_temporal(speeches_df: pd.DataFrame) -> None:
     for label, date_str in events.items():
         ev = pd.Timestamp(date_str)
         if t_min <= ev <= t_max:
-            ax.axvline(ev, color="white", lw=1, alpha=0.5, ls="--", zorder=4)
+            ax.axvline(ev, color="#9CA3AF", lw=1, alpha=0.8, ls="--", zorder=4)
             ax.annotate(label, xy=(ev, y_max * 0.88), xytext=(5, 0),
                         textcoords="offset points", fontsize=8, color="#CCCCDD",
                         rotation=90, va="top")
@@ -930,25 +1027,25 @@ def plot_08_temporal(speeches_df: pd.DataFrame) -> None:
                 ("44-1", "2021-11-22", "2025-01-01")]
     for _, start, end in sessions:
         s, e = pd.Timestamp(start), pd.Timestamp(end)
-        ax.axvspan(max(s, t_min), min(e, t_max), alpha=0.04, color="white")
+        ax.axvspan(max(s, t_min), min(e, t_max), alpha=0.06, color="#E5E7EB")
 
     ax.set_xlabel("Date")
     ax.set_ylabel("Speech Count (4-week rolling avg)")
     ax.tick_params(axis="x", rotation=30)
     ax.legend(loc="upper right", framealpha=0.2, facecolor=PANEL_BG,
-              edgecolor=GRID, labelcolor="#CCCCDD")
+              edgecolor=GRID, labelcolor="#374151")
     ax.set_title("Temporal Distribution of CCUS Legislative Discourse",
-                 color="white", fontsize=14, fontweight="bold")
+                 color="#111827", fontsize=14, fontweight="bold")
     fig.text(0.5, -0.02, "Rolling 4-week average speech counts by expressed stance",
-             ha="center", color="#AAAACC", fontsize=9)
+             ha="center", color="#4B5563", fontsize=9)
     _save_fig(fig, "vis_08_temporal")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PLOT 09 — Word Clouds by Frame Category
+# PLOT 07 — Word Clouds by Frame Category
 # ─────────────────────────────────────────────────────────────────────────────
 
-def plot_09_wordclouds(speeches_df: pd.DataFrame) -> None:
+def plot_07_wordclouds(speeches_df: pd.DataFrame) -> None:
     try:
         from wordcloud import WordCloud
         from sklearn.feature_extraction.text import TfidfVectorizer
@@ -957,11 +1054,11 @@ def plot_09_wordclouds(speeches_df: pd.DataFrame) -> None:
         return
 
     frame_palettes = {
-        "Economic":       ["#F7C59F", "#F4A261", "#E07B39"],
-        "Environmental":  ["#6EE7B7", "#34D399", "#059669"],
-        "Technological":  ["#93C5FD", "#60A5FA", "#3B82F6"],
-        "Regional":       ["#C4B5FD", "#A78BFA", "#7C3AED"],
-        "Social/Justice": ["#FCA5A5", "#F87171", "#EF4444"],
+        "Economic":      ["#F7C59F", "#F4A261", "#E07B39"],
+        "Environmental": ["#6EE7B7", "#34D399", "#059669"],
+        "Political":     ["#C4B5FD", "#A78BFA", "#7C3AED"],
+        "Scientific":    ["#93C5FD", "#60A5FA", "#3B82F6"],
+        "Innovation":    ["#FCA5A5", "#F87171", "#EF4444"],
     }
 
     def color_func_for(palette):
@@ -989,14 +1086,19 @@ def plot_09_wordclouds(speeches_df: pd.DataFrame) -> None:
         except Exception:
             scores = {w: 1.0 for text in corpus for w in text.split()[:10]}
 
-        # Remove zero-weight words and skip if nothing remains.
-        scores = {w: v for w, v in scores.items() if v > 0}
+        # Remove generic CCUS terms and zero-weight words, and skip if nothing remains.
+        EXCLUDE = {"carbon", "capture", "storage", "ccs", "ccus", "co2"}
+        scores = {
+            w: v
+            for w, v in scores.items()
+            if v > 0 and w.lower() not in EXCLUDE
+        }
         if not scores:
             ax.axis("off")
             continue
 
         wc = WordCloud(
-            background_color="#1A1A2E",
+            background_color=BG,
             color_func=color_func_for(frame_palettes[frame]),
             max_words=60, width=600, height=350,
             prefer_horizontal=0.85, collocations=False,
@@ -1014,17 +1116,17 @@ def plot_09_wordclouds(speeches_df: pd.DataFrame) -> None:
     axes[1][2].axis("off")
 
     fig.suptitle("Key Vocabulary by Argument Frame",
-                 color="white", fontsize=15, fontweight="bold", y=1.02)
+                 color="#111827", fontsize=15, fontweight="bold", y=1.02)
     fig.text(0.5, 0.985, "Word size proportional to TF-IDF weight within frame",
-             ha="center", color="#AAAACC", fontsize=10)
-    _save_fig(fig, "vis_09_wordclouds")
+             ha="center", color="#4B5563", fontsize=10)
+    _save_fig(fig, "vis_07_wordclouds")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PLOT 10 — Dot Strip: MP Ideological Position on CCUS
+# PLOT 08 — Dot Strip: MP Ideological Position on CCUS
 # ─────────────────────────────────────────────────────────────────────────────
 
-def plot_10_ideological_positions(speeches_df: pd.DataFrame) -> None:
+def plot_08_ideological_positions(speeches_df: pd.DataFrame) -> None:
     if speeches_df.empty:
         print("  Skipping Plot 10: no speech data available.")
         return
@@ -1052,9 +1154,9 @@ def plot_10_ideological_positions(speeches_df: pd.DataFrame) -> None:
     ax  = fig.add_subplot(111)
     _apply_dark_theme(ax)
 
-    ax.axvspan(-1.1, 0,   alpha=0.04, color="#FF6B6B", zorder=0)
-    ax.axvspan(0,    1.1, alpha=0.04, color="#3EC9A7", zorder=0)
-    ax.axvline(0, color="white", lw=1.5, alpha=0.5, zorder=2)
+    ax.axvspan(-1.1, 0,   alpha=0.08, color="#FECACA", zorder=0)
+    ax.axvspan(0,    1.1, alpha=0.08, color="#BBF7D0", zorder=0)
+    ax.axvline(0, color="#9CA3AF", lw=1.2, alpha=0.8, zorder=2)
 
     for _, row in agg.iterrows():
         py   = party_y.get(row["party"], 0)
@@ -1068,8 +1170,8 @@ def plot_10_ideological_positions(speeches_df: pd.DataFrame) -> None:
         if abs(row["score"] - pm) > 0.3 and row["total_count"] >= 3:
             ax.annotate(row["mp_name"].split()[-1],
                         xy=(row["score"], y), xytext=(8, 5),
-                        textcoords="offset points", fontsize=8, color="white",
-                        arrowprops=dict(arrowstyle="->", color="white", lw=0.8))
+                        textcoords="offset points", fontsize=8, color="#111827",
+                        arrowprops=dict(arrowstyle="->", color="#6B7280", lw=0.8))
 
     for party, mean_score in party_means.items():
         if party in party_y:
@@ -1094,14 +1196,14 @@ def plot_10_ideological_positions(speeches_df: pd.DataFrame) -> None:
         ax.scatter([], [], s=cnt * 8, color="#A0A0B0", edgecolors="white",
                    linewidth=0.8, alpha=0.85, label=lbl)
     ax.legend(loc="lower right", framealpha=0.2, facecolor=PANEL_BG, edgecolor=GRID,
-              labelcolor="#CCCCDD", fontsize=8, title="Total Speeches", title_fontsize=9)
+              labelcolor="#374151", fontsize=8, title="Total Speeches", title_fontsize=9)
 
     ax.set_title("MP-Level Ideological Positioning on Federal CCUS Legislation",
-                 color="white", fontsize=14, fontweight="bold")
+                 color="#111827", fontsize=14, fontweight="bold")
     fig.text(0.5, -0.02,
              "Score = (Pro − Anti) / Total speeches. Dot size = total speech volume.",
-             ha="center", color="#AAAACC", fontsize=9)
-    _save_fig(fig, "vis_10_ideological_positions")
+             ha="center", color="#4B5563", fontsize=9)
+    _save_fig(fig, "vis_08_ideological_positions")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1116,7 +1218,7 @@ def _hex_rgba(hex_color: str, alpha: float = 0.45) -> str:
 def _plotly_layout(**extra) -> dict:
     base = dict(
         paper_bgcolor=BG, plot_bgcolor=PANEL_BG,
-        font=dict(color="#CCCCDD", size=12, family="Inter"),
+        font=dict(color="#111827", size=12, family="Inter"),
         margin=dict(l=60, r=40, t=70, b=50),
     )
     base.update(extra)
@@ -1185,15 +1287,15 @@ def _iplot_01_lollipop(speeches_df: pd.DataFrame) -> None:
                            font=dict(color=pc, size=11), bgcolor=PANEL_BG,
                            borderpad=3, opacity=0.9, xanchor="center", yanchor="middle")
 
-    fig.add_vline(x=0, line_color="white", line_width=1.5, opacity=0.4)
+    fig.add_vline(x=0, line_color="#9CA3AF", line_width=1.2, opacity=0.8)
     mx = max(pivot["Pro-CCUS"].max(), pivot["Anti-CCUS"].max(), 1)
     fig.update_layout(
         **_plotly_layout(
             title=dict(text="Parliamentary Engagement with Federal CCUS Legislation by MP and Stance",
-                       font=dict(size=15, color="white")),
+                       font=dict(size=15, color="#111827")),
             xaxis=dict(range=[-mx * 1.5, mx * 1.35], gridcolor=GRID, zerolinecolor=GRID,
                        title=dict(text="← ANTI   |   CONDITIONAL   |   PRO →",
-                                  font=dict(size=13, color="#CCCCDD"))),
+                                  font=dict(size=13, color="#374151"))),
             yaxis=dict(visible=False, range=[-0.5, n - 0.5]),
             height=max(500, n * 35 + 100),
         )
@@ -1210,14 +1312,13 @@ def _iplot_02_party_stance(party_df: pd.DataFrame) -> None:
 
     pivot = party_df.pivot_table(index="party", columns="stance",
                                  values="proportion", fill_value=0)
-    for col in ["Pro-CCUS", "Conditional", "Anti-CCUS"]:
+    for col in ["Pro-CCUS", "Conditional", "Anti-CCUS", "Neutral"]:
         if col not in pivot.columns:
             pivot[col] = 0
     pivot = pivot.reindex(pivot["Pro-CCUS"].sort_values().index)
-    counts = party_df.groupby("party")["count"].sum()
 
     fig = go.Figure()
-    for stance in ["Pro-CCUS", "Conditional", "Anti-CCUS"]:
+    for stance in ["Pro-CCUS", "Conditional", "Anti-CCUS", "Neutral"]:
         fig.add_trace(go.Bar(
             y=pivot.index.tolist(),
             x=pivot[stance].tolist(),
@@ -1230,19 +1331,21 @@ def _iplot_02_party_stance(party_df: pd.DataFrame) -> None:
     fig.update_layout(
         **_plotly_layout(
             title=dict(text="Party-Level Positioning on Federal CCUS Legislation",
-                       font=dict(size=15, color="white")),
+                       font=dict(size=15, color="#111827")),
             barmode="stack",
-            xaxis=dict(tickformat=".0%", range=[0, 1.12], gridcolor=GRID, title="Proportion"),
-            yaxis=dict(gridcolor=GRID),
-            legend=dict(orientation="h", yanchor="bottom", y=-0.2, x=0.5, xanchor="center"),
-            height=400,
+            xaxis=dict(tickformat=".0%", range=[0, 1.15], gridcolor=GRID, title="Proportion",
+                       tickfont=dict(color="#374151")),
+            yaxis=dict(gridcolor=GRID, tickfont=dict(color="#374151")),
+            legend=dict(orientation="h", yanchor="bottom", y=-0.25, x=0.5, xanchor="center",
+                        font=dict(color="#374151")),
+            height=420,
         )
     )
     _write_interactive(fig, "vis_02_party_stance")
 
 
-def _iplot_04_radar(speeches_df: pd.DataFrame) -> None:
-    """Interactive radar chart: frame prevalence by stance."""
+def _iplot_03_radar(speeches_df: pd.DataFrame) -> None:
+    """Interactive radar chart: frame prevalence by stance (uses all frames, not just primary)."""
     try:
         import plotly.graph_objects as go
     except ImportError:
@@ -1252,9 +1355,14 @@ def _iplot_04_radar(speeches_df: pd.DataFrame) -> None:
     for stance, color in [("Pro-CCUS", STANCE_COLORS["Pro-CCUS"]),
                            ("Anti-CCUS", STANCE_COLORS["Anti-CCUS"])]:
         sub    = speeches_df[speeches_df["stance"] == stance]
-        counts = [sub[sub["primary_frame"] == f]["speech_count"].sum() for f in FRAMES]
-        mx     = max(counts) or 1
-        vals   = [c / mx for c in counts]
+        counts = []
+        for f in FRAMES:
+            c = sub[sub["frames"].apply(
+                lambda fs: isinstance(fs, list) and f in fs
+            )]["speech_count"].sum()
+            counts.append(c)
+        mx  = max(counts) or 1
+        vals = [c / mx for c in counts]
         fig.add_trace(go.Scatterpolar(
             r=vals + [vals[0]],
             theta=FRAMES + [FRAMES[0]],
@@ -1268,27 +1376,28 @@ def _iplot_04_radar(speeches_df: pd.DataFrame) -> None:
         **_plotly_layout(
             polar=dict(
                 bgcolor=PANEL_BG,
-                radialaxis=dict(visible=True, range=[0, 1], gridcolor=GRID, color="#AAAACC"),
-                angularaxis=dict(gridcolor=GRID, color="#CCCCDD"),
+                radialaxis=dict(visible=True, range=[0, 1], gridcolor=GRID, color="#4B5563"),
+                angularaxis=dict(gridcolor=GRID, color="#374151"),
             ),
             title=dict(text="Argument Frame Composition: Pro-CCUS vs Anti-CCUS",
-                       font=dict(size=15, color="white")),
-            legend=dict(orientation="h", yanchor="bottom", y=-0.15, x=0.5, xanchor="center"),
+                       font=dict(size=15, color="#111827")),
+            legend=dict(orientation="h", yanchor="bottom", y=-0.15, x=0.5, xanchor="center",
+                        font=dict(color="#374151")),
             height=550,
         )
     )
     _write_interactive(fig, "vis_04_radar_frames")
 
 
-def _iplot_05_sankey(speeches_df: pd.DataFrame) -> None:
-    """Interactive Sankey: party → stance → frame.  (Re-uses existing plot_05 logic.)"""
+def _iplot_04_sankey(speeches_df: pd.DataFrame) -> None:
+    """Interactive Sankey: party → stance → frame, with explicit left→centre→right layout."""
     try:
         import plotly.graph_objects as go
     except ImportError:
         return
 
     parties_present = [p for p in PARTIES if p in speeches_df["party"].unique()]
-    stances_present = [s for s in ["Pro-CCUS", "Anti-CCUS", "Conditional"]
+    stances_present = [s for s in ["Pro-CCUS", "Conditional", "Anti-CCUS", "Neutral"]
                        if s in speeches_df["stance"].unique()]
     all_nodes = parties_present + stances_present + FRAMES
     node_idx  = {n: i for i, n in enumerate(all_nodes)}
@@ -1312,22 +1421,43 @@ def _iplot_05_sankey(speeches_df: pd.DataFrame) -> None:
         [STANCE_COLORS.get(s, "#A0A0B0") for s in stances_present] +
         [FRAME_COLORS.get(f, "#A0A0B0")  for f in FRAMES]
     )
+
+    def _spread(n):
+        if n == 1:
+            return [0.5]
+        return [0.05 + 0.90 * i / (n - 1) for i in range(n)]
+
+    node_x = [0.02] * len(parties_present) + [0.50] * len(stances_present) + [0.98] * len(FRAMES)
+    node_y = _spread(len(parties_present)) + _spread(len(stances_present)) + _spread(len(FRAMES))
+
     fig = go.Figure(go.Sankey(
-        node=dict(pad=15, thickness=20, label=all_nodes, color=node_colors,
-                  line=dict(color=BG, width=0.5)),
+        node=dict(
+            pad=20, thickness=22,
+            label=all_nodes, color=node_colors,
+            x=node_x, y=node_y,
+            line=dict(color=GRID, width=0.5),
+        ),
         link=dict(source=sources, target=targets, value=values, color=link_colors),
     ))
     fig.update_layout(
         **_plotly_layout(
             title=dict(text="Flow of CCUS Legislative Discourse: Party → Position → Argument Frame",
-                       font=dict(size=15, color="white")),
-            height=700, margin=dict(l=120, r=120, t=80, b=40),
+                       font=dict(size=15, color="#111827")),
+            annotations=[
+                dict(x=0.02, y=1.06, text="Party",          showarrow=False,
+                     font=dict(color="#374151", size=12), xref="paper", yref="paper"),
+                dict(x=0.50, y=1.06, text="Stance",         showarrow=False,
+                     font=dict(color="#374151", size=12), xref="paper", yref="paper"),
+                dict(x=0.98, y=1.06, text="Argument Frame", showarrow=False,
+                     font=dict(color="#374151", size=12), xref="paper", yref="paper"),
+            ],
+            height=700, margin=dict(l=120, r=120, t=90, b=40),
         )
     )
     _write_interactive(fig, "vis_05_sankey")
 
 
-def _iplot_06_faceted_frames(speeches_df: pd.DataFrame) -> None:
+def _iplot_05_faceted_frames(speeches_df: pd.DataFrame) -> None:
     """Interactive faceted bar: frame frequency by party."""
     try:
         import plotly.graph_objects as go
@@ -1364,16 +1494,16 @@ def _iplot_06_faceted_frames(speeches_df: pd.DataFrame) -> None:
     fig.update_layout(
         **_plotly_layout(
             title=dict(text="Argument Frame Distribution by Party",
-                       font=dict(size=15, color="white")),
+                       font=dict(size=15, color="#111827")),
             height=550,
         )
     )
-    fig.update_xaxes(gridcolor=GRID)
-    fig.update_yaxes(gridcolor=GRID)
+    fig.update_xaxes(gridcolor=GRID, tickfont=dict(color="#374151"))
+    fig.update_yaxes(gridcolor=GRID, tickfont=dict(color="#374151"))
     _write_interactive(fig, "vis_06_faceted_frames")
 
 
-def _iplot_07_cooccurrence(speeches_df: pd.DataFrame) -> None:
+def _iplot_06_cooccurrence(speeches_df: pd.DataFrame) -> None:
     """Interactive co-occurrence heatmap."""
     try:
         import plotly.graph_objects as go
@@ -1398,27 +1528,27 @@ def _iplot_07_cooccurrence(speeches_df: pd.DataFrame) -> None:
     fig = go.Figure(go.Heatmap(
         z=display.tolist(),
         x=FRAMES, y=FRAMES,
-        colorscale=[[0, "#1A1A2E"], [0.5, "#7B5EA7"], [1, "#F7C59F"]],
+        colorscale=[[0, PANEL_BG], [0.5, "#7B5EA7"], [1, "#E07B39"]],
         text=[[f"{int(v)}" if v is not None else "" for v in row] for row in display],
         texttemplate="%{text}",
         hovertemplate="<b>%{y} × %{x}</b><br>Count: %{z}<extra></extra>",
         showscale=True,
-        colorbar=dict(title=dict(text="Count", font=dict(color="#CCCCDD")), tickfont=dict(color="#CCCCDD")),
+        colorbar=dict(title=dict(text="Count", font=dict(color="#374151")), tickfont=dict(color="#374151")),
     ))
     fig.update_layout(
         **_plotly_layout(
             title=dict(text="Argument Frame Co-occurrence in CCUS Legislative Debates",
-                       font=dict(size=15, color="white")),
+                       font=dict(size=15, color="#111827")),
             xaxis=dict(side="bottom", tickangle=30,
-                       tickfont=dict(color="#CCCCDD"), gridcolor=GRID),
-            yaxis=dict(tickfont=dict(color="#CCCCDD"), gridcolor=GRID, autorange="reversed"),
+                       tickfont=dict(color="#374151"), gridcolor=GRID),
+            yaxis=dict(tickfont=dict(color="#374151"), gridcolor=GRID, autorange="reversed"),
             height=500,
         )
     )
     _write_interactive(fig, "vis_07_cooccurrence")
 
 
-def _iplot_09_wordcloud_table(speeches_df: pd.DataFrame) -> None:
+def _iplot_07_wordcloud_table(speeches_df: pd.DataFrame) -> None:
     """Interactive word-weight table by frame (word clouds can't be interactive in Plotly)."""
     try:
         import plotly.graph_objects as go
@@ -1463,34 +1593,34 @@ def _iplot_09_wordcloud_table(speeches_df: pd.DataFrame) -> None:
     fig.update_layout(
         **_plotly_layout(
             title=dict(text="Top Keywords by Argument Frame (TF-IDF weight)",
-                       font=dict(size=15, color="white")),
+                       font=dict(size=15, color="#111827")),
             height=600,
         )
     )
-    fig.update_xaxes(gridcolor=GRID)
-    fig.update_yaxes(gridcolor=GRID)
+    fig.update_xaxes(gridcolor=GRID, tickfont=dict(color="#374151"))
+    fig.update_yaxes(gridcolor=GRID, tickfont=dict(color="#374151"))
     _write_interactive(fig, "vis_09_wordclouds")
 
 
 # ─── Dashboard assembly ──────────────────────────────────────────────────────
 
 _DASHBOARD_PLOTS = [
-    ("vis_01_mp_lollipop",    "MP Speaking Frequency & Stance",       "01 MP Lollipop"),
-    ("vis_02_party_stance",   "Party-Level CCUS Positioning",         "02 Party Stance"),
-    ("vis_04_radar_frames",   "Frame Prevalence by Stance (Radar)",   "04 Radar Frames"),
-    ("vis_05_sankey",         "Discourse Flow: Party → Stance → Frame","05 Sankey"),
-    ("vis_06_faceted_frames", "Frame Distribution by Party",          "06 Faceted Frames"),
-    ("vis_07_cooccurrence",   "Frame Co-occurrence Heatmap",          "07 Co-occurrence"),
-    ("vis_09_wordclouds",     "Key Vocabulary by Argument Frame",     "09 Word Clouds"),
+    ("vis_01_mp_lollipop",    "MP Speaking Frequency & Stance",        "01 MP Lollipop"),
+    ("vis_02_party_stance",   "Party-Level CCUS Positioning",          "02 Party Stance"),
+    ("vis_04_radar_frames",   "Frame Prevalence by Stance (Radar)",    "03 Radar Frames"),
+    ("vis_05_sankey",         "Discourse Flow: Party → Stance → Frame","04 Sankey"),
+    ("vis_06_faceted_frames", "Frame Distribution by Party",           "05 Faceted Frames"),
+    ("vis_07_cooccurrence",   "Frame Co-occurrence Heatmap",           "06 Co-occurrence"),
+    ("vis_09_wordclouds",     "Key Vocabulary by Argument Frame",      "07 Word Clouds"),
 ]
 
 _DASHBOARD_CSS = """
 :root {
-  --bg:      #0F0F1A;
-  --panel:   #1A1A2E;
-  --grid:    #2A2A45;
-  --text:    #CCCCDD;
-  --accent:  #3EC9A7;
+  --bg:      #FFFFFF;
+  --panel:   #F3F4F6;
+  --grid:    #D1D5DB;
+  --text:    #111827;
+  --accent:  #059669;
   --card-r:  12px;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -1502,19 +1632,19 @@ body {
   padding: 2rem;
 }
 header {
-  border-bottom: 1px solid var(--grid);
+  border-bottom: 2px solid var(--grid);
   padding-bottom: 1.2rem;
   margin-bottom: 2rem;
 }
 header h1 {
   font-size: 1.5rem;
   font-weight: 700;
-  color: #fff;
+  color: #111827;
   letter-spacing: -0.02em;
 }
 header p {
   font-size: 0.85rem;
-  color: #888;
+  color: #6B7280;
   margin-top: 0.35rem;
 }
 .grid {
@@ -1527,10 +1657,11 @@ header p {
   border: 1px solid var(--grid);
   border-radius: var(--card-r);
   overflow: hidden;
-  transition: border-color 0.2s, transform 0.2s;
+  transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
 }
 .card:hover {
   border-color: var(--accent);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.10);
   transform: translateY(-2px);
 }
 .card a {
@@ -1549,7 +1680,7 @@ header p {
   height: 100%;
   object-fit: cover;
   display: block;
-  opacity: 0.85;
+  opacity: 0.92;
   transition: opacity 0.2s;
 }
 .card:hover .thumb-wrap img { opacity: 1; }
@@ -1560,7 +1691,7 @@ header p {
   align-items: center;
   justify-content: center;
   opacity: 0;
-  background: rgba(15,15,26,0.6);
+  background: rgba(243,244,246,0.75);
   transition: opacity 0.2s;
   font-size: 0.9rem;
   font-weight: 600;
@@ -1573,19 +1704,19 @@ header p {
 .card-body h3 {
   font-size: 0.95rem;
   font-weight: 600;
-  color: #fff;
+  color: #111827;
   margin-bottom: 0.25rem;
 }
 .card-body p {
   font-size: 0.78rem;
-  color: #888;
+  color: #6B7280;
 }
 footer {
   margin-top: 3rem;
   border-top: 1px solid var(--grid);
   padding-top: 1.2rem;
   font-size: 0.78rem;
-  color: #555;
+  color: #9CA3AF;
   text-align: center;
 }
 """
@@ -1612,11 +1743,11 @@ def plot_interactive_dashboard(
     print("  Building interactive HTML pages ...")
     _iplot_01_lollipop(speeches_df)
     _iplot_02_party_stance(party_df)
-    _iplot_04_radar(speeches_df)
-    _iplot_05_sankey(speeches_df)
-    _iplot_06_faceted_frames(speeches_df)
-    _iplot_07_cooccurrence(speeches_df)
-    _iplot_09_wordcloud_table(speeches_df)
+    _iplot_03_radar(speeches_df)
+    _iplot_04_sankey(speeches_df)
+    _iplot_05_faceted_frames(speeches_df)
+    _iplot_06_cooccurrence(speeches_df)
+    _iplot_07_wordcloud_table(speeches_df)
 
     # ── Build dashboard.html ─────────────────────────────────────────────────
     cards_html = []
@@ -1682,14 +1813,12 @@ def _run_all_plots(speeches_df, party_df, frame_df) -> None:
     plots = [
         ("01 MP Lollipop",           lambda: plot_01_mp_lollipop(speeches_df)),
         ("02 Party Stance",          lambda: plot_02_party_stance(party_df)),
-        ("03 MP Bill Heatmap",       lambda: plot_03_mp_bill_heatmap(speeches_df)),
-        ("04 Radar Frames",          lambda: plot_04_radar_frames(speeches_df)),
-        ("05 Sankey",                lambda: plot_05_sankey(speeches_df)),
-        ("06 Faceted Frames",        lambda: plot_06_faceted_frames(speeches_df)),
-        ("07 Co-occurrence",         lambda: plot_07_cooccurrence(speeches_df)),
-        ("08 Temporal",              lambda: plot_08_temporal(speeches_df)),
-        ("09 Word Clouds",           lambda: plot_09_wordclouds(speeches_df)),
-        ("10 Ideological Positions", lambda: plot_10_ideological_positions(speeches_df)),
+        ("03 Radar Frames",          lambda: plot_03_radar_frames(speeches_df)),
+        ("04 Sankey",                lambda: plot_04_sankey(speeches_df)),
+        ("05 Faceted Frames",        lambda: plot_05_faceted_frames(speeches_df)),
+        ("06 Co-occurrence",         lambda: plot_06_cooccurrence(speeches_df)),
+        ("07 Word Clouds",           lambda: plot_07_wordclouds(speeches_df)),
+        ("08 Ideological Positions", lambda: plot_08_ideological_positions(speeches_df)),
     ]
 
     for name, fn in plots:

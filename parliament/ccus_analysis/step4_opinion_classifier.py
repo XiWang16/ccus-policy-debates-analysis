@@ -33,10 +33,9 @@ OPINION_SCHEMA = {
                         "enum": [
                             "economic",
                             "environmental",
-                            "ethical",
-                            "social",
-                            "technical",
-                            "jurisdictional",
+                            "political",
+                            "scientific",
+                            "innovation",
                         ],
                     },
                     "text": {"type": "string"},
@@ -61,9 +60,13 @@ Classify overall stance as one of:
 - oppose: generally critical, argues against CCUS investment or effectiveness
 - neutral: no clear position expressed
 - mixed: acknowledges merits and drawbacks, or position is nuanced/conditional
-
 For each distinct argument made, identify:
-- type: one of economic | environmental | ethical | social | technical | jurisdictional
+- type: one of economic | environmental | political | scientific | innovation. Use these categories and definitions:
+  - Economic: costs, benefits, jobs, competitiveness, market impacts, fiscal implications
+  - Environmental: ecological integrity, emissions, biodiversity, planetary boundaries, pollution
+  - Political: governance authority, federalism, sovereignty, constitutional competence, partisan dynamics
+  - Scientific: scientific evidence, data, models, expert knowledge, technological feasibility
+  - Innovation: technological solutions, innovation potential, R&D, CCS/CCUS as a technological fix
 - text: a concise summary of the argument (1-2 sentences)
 - quote: the most relevant verbatim excerpt from the speeches (keep it under 200 characters)
 
@@ -228,6 +231,9 @@ def _write_step4_opinions(
             bill.get("number", "") or "",
         )
 
+    # Discard any partially-written records left by a previously interrupted run
+    # so they are re-processed from the beginning rather than silently skipped.
+    out_records = [r for r in out_records if r.get("complete", True)]
     processed_keys = { _key_from_rec(r) for r in out_records }
 
     # Helper to rewrite JSON and CSV after each bill so partial progress is saved.
@@ -311,7 +317,6 @@ def _write_step4_opinions(
                             }
                         )
 
-    records = records[:3]
     print(f"[Step4] Classifying opinions for {len(records)} bill entr(y/ies)...", flush=True)
 
     for rec in records:
@@ -327,7 +332,21 @@ def _write_step4_opinions(
             continue
 
         opinions_out: list[dict] = []
-        actors = rec.get("actors", [])[:3]
+        # Add the bill entry to out_records before the actor loop so that
+        # _rewrite_outputs() can flush partial progress after every actor.
+        # opinions_out is a shared reference, so appending to it updates the
+        # entry in-place. complete=False lets the resume logic re-process this
+        # bill from scratch if the run is interrupted mid-way through its actors.
+        current_entry = {
+            "manual_number": rec["manual_number"],
+            "manual_session": rec["manual_session"],
+            "bill": bill,
+            "opinions": opinions_out,
+            "complete": False,
+        }
+        out_records.append(current_entry)
+
+        actors = rec.get("actors", [])
         for idx, a in enumerate(actors, 1):
             actor = PoliticalActor(
                 name=a["name"],
@@ -350,21 +369,17 @@ def _write_step4_opinions(
                     },
                     "stance": op.stance,
                     "confidence": op.confidence,
+                    "speech_count": len(actor.speeches),
                     "arguments": [
                         {"type": arg.type, "text": arg.text, "quote": arg.quote}
                         for arg in op.arguments
                     ],
                 }
             )
+            # Save after every actor so progress is not lost if the run is interrupted.
+            _rewrite_outputs()
 
-        out_records.append(
-            {
-                "manual_number": rec["manual_number"],
-                "manual_session": rec["manual_session"],
-                "bill": bill,
-                "opinions": opinions_out,
-            }
-        )
+        current_entry["complete"] = True
         processed_keys.add(key)
         _rewrite_outputs()
 
