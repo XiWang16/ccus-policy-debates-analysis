@@ -155,6 +155,12 @@ def _get_llm_response_ollama(instructions, text, model, chat_history, json,
         options["temperature"] = 0
     if top_p is not None:
         options["top_p"] = top_p
+    if json:
+        # Disable qwen3-style extended thinking for structured JSON output.
+        # Thinking mode can generate very long chains of thought that cause
+        # server-side timeouts on larger inputs without improving JSON quality.
+        options["think"] = False
+        options.setdefault("num_predict", 4096)
     if options:
         req["options"] = options
 

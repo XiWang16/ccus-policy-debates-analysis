@@ -85,7 +85,7 @@ PARLIAMENT_GENERATE_TEXT_ANALYSIS = False
 # Ollama (local LLM) - used by CCUS analysis and other LLM features
 OLLAMA_BASE_URL = 'http://localhost:11434'
 # Model for CCUS opinion classification. Change to switch models, e.g. 'ollama:llama3.1:8b'
-CCUS_LLM_MODEL = 'ollama:qwen3:14b'
+CCUS_LLM_MODEL = 'ollama:qwen3:8b'
 
 APPEND_SLASH = False
 
