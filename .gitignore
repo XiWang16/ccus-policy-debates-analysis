@@ -32,3 +32,11 @@ build
 # Local databases
 db.sqlite3
 parliament.sqlite
+
+# Local virtualenvs and tooling
+.cursor-venv/
+.mplconfig/
+.claude/
+
+# Generated analysis outputs
+parliament/ccus_analysis/output/

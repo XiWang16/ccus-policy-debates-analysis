@@ -29,7 +29,7 @@ import pandas as pd
 import seaborn as sns
 from matplotlib.lines import Line2D
 
-from .config import VIS_DIR, JSON_DIR
+from .config import VIS_DIR, JSON_DIR, CSV_DIR
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DESIGN SYSTEM
@@ -585,7 +585,7 @@ def plot_02_party_stance(party_df: pd.DataFrame) -> None:
     totals = party_df.groupby("party")["count"].sum()
     pivot  = pivot.reindex(pivot["Pro-CCUS"].sort_values().index)
 
-    fig = _make_fig((11, 6))
+    fig = _make_fig((12.0, 7.0))
     ax  = fig.add_subplot(111)
     _apply_dark_theme(ax)
     ax.grid(False)
@@ -601,30 +601,45 @@ def plot_02_party_stance(party_df: pd.DataFrame) -> None:
         for j, (v, l) in enumerate(zip(vals, left)):
             if v > 0.07:
                 ax.text(l + v / 2, j, f"{v:.0%}", va="center", ha="center",
-                        color="#111827", fontsize=9, fontweight="bold")
+                        color="#111827", fontsize=13, fontweight="bold")
         left += vals
 
     for j, party in enumerate(pivot.index):
         n = int(totals.get(party, 0))
-        ax.text(1.02, j, f"n={n}", va="center", color="#374151", fontsize=9)
+        ax.text(1.02, j, f"{n}", va="center", color="#374151", fontsize=13)
 
     ax.set_yticks(range(len(pivot)))
-    ax.set_yticklabels(pivot.index)
+    ax.set_yticklabels(pivot.index, fontsize=13)
     for tick, party in zip(ax.get_yticklabels(), pivot.index):
         tick.set_color(PARTY_COLORS.get(party, "#A0A0B0"))
 
     ax.set_xlim(0, 1.15)
     ax.axvline(0.5, color="#9CA3AF", lw=1, alpha=0.7, linestyle=":")
-    ax.set_xlabel("Proportion of CCUS Speech Segments")
+    ax.set_xlabel("Proportion of CCUS Speeches", fontsize=13, labelpad=8)
     ax.xaxis.set_major_formatter(mticker.PercentFormatter(1.0))
 
     patches = [mpatches.Patch(color=STANCE_COLORS[s], label=s)
                for s in ["Pro-CCUS", "Conditional", "Anti-CCUS", "Neutral"]]
-    ax.legend(handles=patches, loc="upper center", bbox_to_anchor=(0.5, -0.26),
-              framealpha=0.2, facecolor=PANEL_BG, edgecolor=GRID, labelcolor="#374151", ncol=4)
+    ax.legend(
+        handles=patches,
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.15),
+        framealpha=0.2,
+        facecolor=PANEL_BG,
+        edgecolor=GRID,
+        labelcolor="#374151",
+        ncol=4,
+        fontsize=13,
+        title_fontsize=14,
+    )
 
-    ax.set_title("Party-Level Positioning on Federal CCUS Legislation",
-                 color="#111827", fontsize=14, fontweight="bold")
+    ax.set_title(
+        "Party-Level Positioning on Federal CCUS Legislation",
+        color="#111827",
+        fontsize=18,
+        fontweight="bold",
+        pad=8,
+    )
     # ax.text(0.5, -0.13, "Proportion of speech segments by expressed stance",
     #         transform=ax.transAxes, ha="center", color="#4B5563", fontsize=9)
     _save_fig(fig, "vis_02_party_stance")
@@ -864,20 +879,62 @@ def plot_04_sankey(speeches_df: pd.DataFrame) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PLOT 05 — Faceted Bar: Frame Frequency by Party
+# PLOT 05 — Faceted Bar: Frame Frequency by Party (argument-level)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def plot_05_faceted_frames(speeches_df: pd.DataFrame) -> None:
-    fig, axes = plt.subplots(2, 3, figsize=(16, 10))
+    """
+    Faceted horizontal bar chart of *argument* frames by party.
+
+    Note: This plot now works at the individual-argument level, using
+    step4_arguments.csv, rather than opinion-level primary frames and
+    speech counts.
+    """
+    args_path = CSV_DIR / "step4_arguments.csv"
+    if not args_path.exists():
+        print(f"  WARNING: {args_path} not found; skipping Faceted Frames plot.")
+        return
+
+    args_df = pd.read_csv(args_path)
+    args_df["party"] = (args_df["party"].fillna("Independent").str.strip())
+    args_df.loc[args_df["party"] == "Bloc", "party"] = "Bloc Québécois"
+
+    frame_map = {
+        "economic": "Economic",
+        "environmental": "Environmental",
+        "political": "Political",
+        "scientific": "Scientific",
+        "innovation": "Innovation",
+        # Legacy labels (if any) mapped into the new frame set
+        "technical": "Scientific",
+        "technological": "Scientific",
+        "jurisdictional": "Political",
+        "social": "Political",
+        "ethical": "Political",
+    }
+    args_df["frame"] = (
+        args_df["arg_type"]
+        .astype(str)
+        .str.strip()
+        .str.lower()
+        .map(frame_map)
+        .fillna("Economic")
+    )
+
+    fig, axes = plt.subplots(2, 3, figsize=(19, 10))
     fig.patch.set_facecolor(BG)
-    # Slightly larger vertical spacing so titles/plots/legend breathe.
-    fig.tight_layout(h_pad=5.5, w_pad=3.8)
+    # More generous spacing so panels have breathing room horizontally.
+    fig.tight_layout(h_pad=5.5, w_pad=7.5)
 
     # Global x limit so all party panels share the same horizontal scale for comparability
     x_max_global = 1
     for _party in PARTIES:
-        _sub = speeches_df[speeches_df["party"] == _party]
-        _counts = _sub.groupby("primary_frame")["speech_count"].sum().reindex(FRAMES, fill_value=0)
+        _sub = args_df[args_df["party"] == _party]
+        _counts = (
+            _sub.groupby("frame")["frame"]
+            .count()
+            .reindex(FRAMES, fill_value=0)
+        )
         if len(_counts):
             x_max_global = max(x_max_global, _counts.max())
     x_lim = (0, int(x_max_global * 1.05) + 1)
@@ -887,26 +944,34 @@ def plot_05_faceted_frames(speeches_df: pd.DataFrame) -> None:
         _apply_dark_theme(ax)
         ax.grid(False)
 
-        sub    = speeches_df[speeches_df["party"] == party]
+        sub    = args_df[args_df["party"] == party]
         # Fixed order across all parties: FRAMES order (Economic, Environmental, Political, Scientific, Innovation)
-        counts = (sub.groupby("primary_frame")["speech_count"].sum()
-                  .reindex(FRAMES, fill_value=0))
+        counts = (
+            sub.groupby("frame")["frame"]
+            .count()
+            .reindex(FRAMES, fill_value=0)
+        )
         colors = [FRAME_COLORS_SOLID[f] for f in counts.index]
 
         bars = ax.barh(range(len(counts)), counts.values, color=colors, height=0.6, linewidth=0)
         for bar, val in zip(bars, counts.values):
             ax.text(bar.get_width() + 0.2, bar.get_y() + bar.get_height() / 2,
-                    str(int(val)), va="center", color="#111827", fontsize=10)
+                    str(int(val)), va="center", color="#111827", fontsize=14)
 
         ax.set_yticks(range(len(counts)))
-        ax.set_yticklabels(counts.index, fontsize=11, color="#111827")
-        ax.set_title(party, color=PARTY_COLORS.get(party, "#A0A0B0"),
-                     fontsize=14, fontweight="bold", pad=8)
+        ax.set_yticklabels(counts.index, fontsize=14, color="#111827")
+        ax.set_title(
+            party,
+            color=PARTY_COLORS.get(party, "#A0A0B0"),
+            fontsize=19,
+            fontweight="bold",
+            pad=10,
+        )
         ax.spines["top"].set_visible(True)
         ax.spines["top"].set_color(PARTY_COLORS.get(party, "#A0A0B0"))
         ax.spines["top"].set_linewidth(3)
         if idx // 3 == 1:
-            ax.set_xlabel("Speech Count", color="#374151", fontsize=11, labelpad=6)
+            ax.set_xlabel("Argument Count", color="#374151", fontsize=14, labelpad=10)
         ax.xaxis.set_major_locator(mticker.MaxNLocator(integer=True))
         ax.set_xlim(x_lim)
 
@@ -915,11 +980,24 @@ def plot_05_faceted_frames(speeches_df: pd.DataFrame) -> None:
     ax_leg.set_facecolor(PANEL_BG)
     ax_leg.axis("off")
     patches = [mpatches.Patch(color=FRAME_COLORS_SOLID[f], label=f) for f in FRAMES]
-    ax_leg.legend(handles=patches, loc="center", framealpha=0, labelcolor="#111827",
-                  fontsize=12, title="Argument Frames", title_fontsize=13, labelspacing=1.4)
+    ax_leg.legend(
+        handles=patches,
+        loc="center",
+        framealpha=0,
+        labelcolor="#111827",
+        fontsize=14,
+        title="Argument Frames",
+        title_fontsize=15,
+        labelspacing=1.6,
+    )
 
-    fig.suptitle("Argument Frame Distribution by Party",
-                 color="#111827", fontsize=17, fontweight="bold", y=1.03)
+    fig.suptitle(
+        "Argument Frame Distribution by Party",
+        color="#111827",
+        fontsize=20,
+        fontweight="bold",
+        y=1.06,
+    )
     _save_fig(fig, "vis_05_faceted_frames")
 
 
@@ -1330,15 +1408,32 @@ def _iplot_02_party_stance(party_df: pd.DataFrame) -> None:
 
     fig.update_layout(
         **_plotly_layout(
-            title=dict(text="Party-Level Positioning on Federal CCUS Legislation",
-                       font=dict(size=15, color="#111827")),
+            title=dict(
+                text="Party-Level Positioning on Federal CCUS Legislation",
+                font=dict(size=18, color="#111827"),
+            ),
             barmode="stack",
-            xaxis=dict(tickformat=".0%", range=[0, 1.15], gridcolor=GRID, title="Proportion",
-                       tickfont=dict(color="#374151")),
-            yaxis=dict(gridcolor=GRID, tickfont=dict(color="#374151")),
-            legend=dict(orientation="h", yanchor="bottom", y=-0.25, x=0.5, xanchor="center",
-                        font=dict(color="#374151")),
-            height=420,
+            xaxis=dict(
+                tickformat=".0%",
+                range=[0, 1.15],
+                gridcolor=GRID,
+                title="Proportion",
+                tickfont=dict(color="#374151", size=12),
+                title_font=dict(size=13, color="#374151"),
+            ),
+            yaxis=dict(
+                gridcolor=GRID,
+                tickfont=dict(color="#374151", size=12),
+            ),
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=-0.25,
+                x=0.5,
+                xanchor="center",
+                font=dict(color="#374151", size=12),
+            ),
+            height=440,
         )
     )
     _write_interactive(fig, "vis_02_party_stance")
@@ -1458,14 +1553,43 @@ def _iplot_04_sankey(speeches_df: pd.DataFrame) -> None:
 
 
 def _iplot_05_faceted_frames(speeches_df: pd.DataFrame) -> None:
-    """Interactive faceted bar: frame frequency by party."""
+    """Interactive faceted bar: frame frequency by party (argument-level)."""
     try:
         import plotly.graph_objects as go
         from plotly.subplots import make_subplots
     except ImportError:
         return
 
-    parties_with_data = [p for p in PARTIES if p in speeches_df["party"].unique()]
+    args_path = CSV_DIR / "step4_arguments.csv"
+    if not args_path.exists():
+        return
+
+    args_df = pd.read_csv(args_path)
+    args_df["party"] = (args_df["party"].fillna("Independent").str.strip())
+    args_df.loc[args_df["party"] == "Bloc", "party"] = "Bloc Québécois"
+
+    frame_map = {
+        "economic": "Economic",
+        "environmental": "Environmental",
+        "political": "Political",
+        "scientific": "Scientific",
+        "innovation": "Innovation",
+        "technical": "Scientific",
+        "technological": "Scientific",
+        "jurisdictional": "Political",
+        "social": "Political",
+        "ethical": "Political",
+    }
+    args_df["frame"] = (
+        args_df["arg_type"]
+        .astype(str)
+        .str.strip()
+        .str.lower()
+        .map(frame_map)
+        .fillna("Economic")
+    )
+
+    parties_with_data = [p for p in PARTIES if p in args_df["party"].unique()]
     ncols = 3
     nrows = (len(parties_with_data) + ncols - 1) // ncols
     fig = make_subplots(rows=nrows, cols=ncols,
@@ -1475,9 +1599,13 @@ def _iplot_05_faceted_frames(speeches_df: pd.DataFrame) -> None:
     for idx, party in enumerate(parties_with_data):
         row_idx = idx // ncols + 1
         col_idx = idx % ncols + 1
-        sub    = speeches_df[speeches_df["party"] == party]
-        counts = (sub.groupby("primary_frame")["speech_count"].sum()
-                  .reindex(FRAMES, fill_value=0).sort_values())
+        sub    = args_df[args_df["party"] == party]
+        counts = (
+            sub.groupby("frame")["frame"]
+            .count()
+            .reindex(FRAMES, fill_value=0)
+            .sort_values()
+        )
         fig.add_trace(go.Bar(
             y=counts.index.tolist(), x=counts.values.tolist(),
             orientation="h",
